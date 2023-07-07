@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello World! Site Title</title>
+  </head>
+  <body>
+    <h1>Hello World!</h1>
+    <canvas id="canvasEl" width="700px" height="500px"></canvas>
+    <br>
+    <input type="file" accept="video/mp4" onchange="start(this.files[0])"/>
+    <button type="button" onclick="bpVideo.playAtMaxSpeed()">Play at max speed</button>
+    <button type="button" onclick="bpVideo.pause()">Pause video</button>
+    <button type="button" onclick="bpVideo.setCanvasFullScreen()">Fullscreen</button>
+    <script type="module">
+      // https://github.com/josephrocca/getVideoFrames.js
+      // https://stackoverflow.com/questions/32699721/javascript-extract-video-frames-reliably
+      import getVideoFrames from "https://deno.land/x/get_video_frames@v0.0.9/mod.js"
+
+      class BlenderpointVideo {
+        constructor(canvas) {
+          this.canvas = canvas;
+          this.ctx = this.canvas.getContext("2d");
+          this.isLoadingVideo = false;
+          // `frames` is a list of VideoFrame object: https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame
+          this.frames = [];
+          this.total_nb_frames = 0; // this might not even be set if the video is not fully loaded.
+          this.videoWidth = 0;
+          this.videoHeight = 0;
+          this.fps = 24;
+          // This will help requestAnimationFrame
+          this.currentFrame = 0;
+          this.lastDrawnFrame = -1; // helpful to know if we need to redraw the frame or not.
+          // playbackSpeed is the speed of playing: 0 means that it does not play, 1 it plays at normal speed forward,
+          // -1 it plays at normal speed backward, 1.5 it plays at speed x1.5…
+          this.playbackSpeed = 0;
+          this.animationFrameID = null;
+          // we might also call request animation frame if the user wants to display something on screen
+          // while the video is not yet loaded, use this for that use case.
+          this.animationFrameIDFetching = null;
+          // resize canvas when needed
+          addEventListener("fullscreenchange", async (event) => {
+            if (!document.fullscreenElement) {
+              // we are quitting fullscreen mode
+              this.canvas.width = this.origCanvasWidth;
+              this.canvas.height = this.origCanvasHeight;
+              // we redraw the canvas as the canvas is cleared.
+              this.redrawWhenResolutionChanges();
+            }
+          });
+        }
+
+        isPlaying() {
+          console.log(this.animationFrameID);
+          return this.animationFrameID != null;
+        }
+        
+        setFps(fps) {
+          this.fps = fps;
+        }
+
+        // call it like:
+        // <input type="file" accept="video/mp4" onchange="bpVideo.loadVideoFile(this.files[0])">
+        // config might contain additional parameters, notably callbacks
+        async loadVideoFileFromFile(file, config) {
+          if (!config) {
+            config = {};
+          }
+          console.log("File", file);
+          let videoObjectURL = URL.createObjectURL(file);
+          console.log("url", videoObjectURL);
+          await this.loadVideoFileFromObjectURL(videoObjectURL, config);
+          URL.revokeObjectURL(file); // revoke URL to prevent memory leak
+        }
+        
+        async loadVideoFileFromObjectURL(videoObjectURL, config) {
+          // We don’t know yet the number of frames
+          this.total_nb_frames = 0;
+          this.frames = [];
+          this.currentFrame = 0;
+          this.lastDrawnFrame = -1;
+          // direction useful to play backward.
+          this.playbackSpeed = 0;
+          this.isLoadingVideo = true;
+          console.log(videoObjectURL);
+          self = this; // otherwise self is replaced with a new self value
+          await getVideoFrames({
+            videoUrl: videoObjectURL,
+            onFrame(frame) {
+              self.frames.push(frame);
+              if (config.onFrame) {
+                config.onFrame(frame, self.frames.length);
+              }
+            },
+            onConfig(config) {
+              self.videoWidth = config.codedWidth;
+              self.videoHeight = config.codedHeight;
+              if (config.onConfig) {
+                config.onConfig();
+              }
+            },
+            onFinish() {
+              console.log("Video loaded.");
+              self.isLoadingVideo = false;
+              self.total_nb_frames = self.frames.length;
+              if (config.onFinish) {
+                config.onFinish();
+              }
+            },
+          });
+        }
+
+        _ensureStoppedAnimationFrameFetching() {
+          if (this.animationFrameIDFetching) {
+            cancelAnimationFrame(this.animationFrameIDFetching)
+            this.animationFrameIDFetching = null;
+          }
+        }
+
+        _ensureStoppedAnimationFrame() {
+          this._ensureStoppedAnimationFrameFetching();
+          if (this.animationFrameID) {
+            cancelAnimationFrame(this.animationFrameID)
+            this.animationFrameID = null;
+          }
+        }
+
+        // Draw a frame on the canvas.
+        // warning: for this to work, make sure to put it into an animationFrame or to call waitRedraw
+        _drawFrame(frame) {
+          // fit in the canvas while preserving the proportions
+          const aspectRatioCanvas = this.canvas.width/this.canvas.height;
+          const aspectRatioFrame = this.videoWidth/this.videoHeight;
+          var w;
+          var h;
+          if (aspectRatioFrame >= aspectRatioCanvas) {
+            // maximum width
+            w = this.canvas.width;
+            h = w/aspectRatioFrame;
+          } else {
+            // maximum height
+            h = this.canvas.height;
+            w = h*aspectRatioFrame;
+          }
+          // fill the canvas with black
+          this.ctx.fillStyle = "black";
+          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+          this.ctx.drawImage(frame, this.canvas.width/2-w/2, this.canvas.height/2-h/2, w, h);
+        }
+
+        // like _drawFrame but takes as argument the index of the frame, and loops with requestAnimationFrame
+        // until the frame is loaded if the file is not yet ready to use.
+        async _drawFrameFromIndex(i) {
+          this._ensureStoppedAnimationFrameFetching();
+          if (i < this.frames.length) {
+            this._drawFrame(this.frames[i]);
+            this.currentFrame = i;
+            this.lastDrawnFrame = i;
+            this._ensureStoppedAnimationFrameFetching();
+          } else if (this.isLoadingVideo) {
+            console.log("The frame is not yet ready as the video is loading.");
+            await new Promise(resolve => {
+              this.animationFrameIDFetching = requestAnimationFrame(() => {this._drawFrameFromIndex(i); resolve()});
+            });
+          } else {
+            const str = `Error: Unreachable frame (frame ${i} bigger than ${this.frames.length}).`;
+            alert(str);
+            console.log(str);
+            throw new Error(str);
+          }
+        }
+        
+        async gotoFrame(i) {
+          this._ensureStoppedAnimationFrame();
+          await this._drawFrame(this.frames[i]);
+          this.currentFrame = i;
+          this.lastDrawnFrame = i;
+          // triggers a refresh
+          await this.waitRedraw();
+        }
+
+        // call "await this.waitRedraw()" to wait for animationFrame to 
+        waitRedraw() {
+          return new Promise(resolve => {
+            this.animationFrameIDFetching = requestAnimationFrame(() => {resolve()});
+          });
+        }
+        
+        // play at the max FPS allowed by the screen refresh rate.
+        async playAtMaxSpeed() {
+          await this._drawFrameFromIndex(this.currentFrame);
+          await this.waitRedraw();
+          this.currentFrame++;
+          // this kind of assume that the video is fully loaded.
+          if (this.currentFrame < this.frames.length) {
+            await this.playAtMaxSpeed();
+          }
+          else {
+            console.log("Finished to draw");
+          }
+        }
+
+        async pause() {
+          this._ensureStoppedAnimationFrame();
+        }
+
+        async setCanvasFullScreen() { 
+          /* When the openFullscreen() function is executed, open the video in fullscreen.
+             Note that we must include prefixes for different browsers, as they don't support the requestFullscreen method yet */
+          this.origCanvasWidth = this.canvas.width;
+          this.origCanvasHeight = this.canvas.height;
+
+          if (this.canvas.requestFullscreen) {
+            await this.canvas.requestFullscreen({navigationUI: "hide"});
+            this.canvas.width = window.innerWidth;
+            this.canvas.height = window.innerHeight;
+          } else {
+            alert("Fullscreen not supported on your browser? Try a more recent browser.");
+          }
+          // we redraw the canvas as the canvas is cleared.
+          this.redrawWhenResolutionChanges()
+        }
+
+        async redrawWhenResolutionChanges() {
+          if (!this.isPlaying()) { // No need to draw if it’s already playing
+            await this._drawFrameFromIndex(this.currentFrame);
+            await this.waitRedraw();
+            console.log("we are not playing")
+          } else {
+            console.log("we are playing")
+          }
+        }
+
+        
+        close() {
+          this.frames.forEach(frame => {
+            frame.close();
+          });
+        }
+      }
+
+      window.bpVideo = new BlenderpointVideo(document.getElementById("canvasEl"));
+      window.start = async function(file) {
+        console.log("Loading video");
+        console.log(window.bpVideo);
+        window.bpVideo.loadVideoFileFromFile(file);        
+      }
+      
+    </script> 
+  </body>
+</html>
