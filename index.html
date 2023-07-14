@@ -31,6 +31,7 @@
           this.fps = 24;
           // This will help requestAnimationFrame
           this.currentFrame = 0;
+          this.timeLastDraw = null;
           this.lastDrawnFrame = -1; // helpful to know if we need to redraw the frame or not.
           // playbackSpeed is the speed of playing: 0 means that it does not play, 1 it plays at normal speed forward,
           // -1 it plays at normal speed backward, 1.5 it plays at speed x1.5…
@@ -39,6 +40,7 @@
           // we might also call request animation frame if the user wants to display something on screen
           // while the video is not yet loaded, use this for that use case.
           this.animationFrameIDFetching = null;
+          this.stops = []; // contains the list of stops
           // resize canvas when needed
           addEventListener("fullscreenchange", async (event) => {
             if (!document.fullscreenElement) {
@@ -118,6 +120,7 @@
           }
         }
 
+        // Basically all animations should start and stop with this._ensureStoppedAnimationFrame()
         _ensureStoppedAnimationFrame() {
           this._ensureStoppedAnimationFrameFetching();
           if (this.animationFrameID) {
@@ -151,23 +154,27 @@
 
         // like _drawFrame but takes as argument the index of the frame, and loops with requestAnimationFrame
         // until the frame is loaded if the file is not yet ready to use.
-        async _drawFrameFromIndex(i) {
+        async _drawFrameFromIndex(i, silentError) {
           this._ensureStoppedAnimationFrameFetching();
           if (i < this.frames.length) {
             this._drawFrame(this.frames[i]);
             this.currentFrame = i;
             this.lastDrawnFrame = i;
             this._ensureStoppedAnimationFrameFetching();
+            return true;
           } else if (this.isLoadingVideo) {
             console.log("The frame is not yet ready as the video is loading.");
-            await new Promise(resolve => {
+            return await new Promise(resolve => {
               this.animationFrameIDFetching = requestAnimationFrame(() => {this._drawFrameFromIndex(i); resolve()});
             });
           } else {
-            const str = `Error: Unreachable frame (frame ${i} bigger than ${this.frames.length}).`;
-            alert(str);
-            console.log(str);
-            throw new Error(str);
+            if(!silentError){
+              const str = `Error: Unreachable frame (frame ${i} bigger than ${this.frames.length}).`;
+              alert(str);
+              console.log(str);
+              throw new Error(str);
+            }
+            return false;
           }
         }
         
@@ -178,29 +185,66 @@
           this.lastDrawnFrame = i;
           // triggers a refresh
           await this.waitRedraw();
+          this._ensureStoppedAnimationFrame();
         }
 
         // call "await this.waitRedraw()" to wait for animationFrame to 
         waitRedraw() {
           return new Promise(resolve => {
-            this.animationFrameIDFetching = requestAnimationFrame(() => {resolve()});
+            this.animationFrameID = requestAnimationFrame(() => {resolve()});
           });
         }
         
         // play at the max FPS allowed by the screen refresh rate.
         async playAtMaxSpeed() {
-          await this._drawFrameFromIndex(this.currentFrame);
-          await this.waitRedraw();
-          this.currentFrame++;
-          // this kind of assume that the video is fully loaded.
-          if (this.currentFrame < this.frames.length) {
-            await this.playAtMaxSpeed();
+          const nextFrame = this.currentFrame + 1;
+          const notTheLastOne = await this._drawFrameFromIndex(nextFrame, true);
+          if(notTheLastOne) {
+            await this.waitRedraw();
+            this.playAtMaxSpeed();
           }
           else {
             console.log("Finished to draw");
+            this._ensureStoppedAnimationFrame();
           }
         }
 
+        // frame is optional, return the next stop. It might return Infinity if there is none
+        async getNextStop(frame) {
+          const initialFrame = frame || this.currentFrame;
+          const st = this.stops.filter(e => e > initialFrame);
+          if (st.length == 0) {
+            return Infinity
+          } else {
+            return Math.min(...st);
+          }
+        }
+
+        // frame is optional
+        async getPreviousStop(frame) {
+          const initialFrame = frame || this.currentFrame;
+          const st = this.stops.filter(e => e < initialFrame);
+          if (st.length == 0) {
+            return 0
+          } else {
+            return Math.min(...st);
+          }
+        }
+
+        // nextstop is optional, it will be automatially computed if needed.
+        // the _ version is an auxiliary function
+        async _playUntilNextStop(nextStop) {
+          // First stop the play
+          this._ensureStoppedAnimationFrame()
+          // We first compute the next stop
+          const initialFrame = this.currentFrame;
+          const nextStop = nextStop || this.getNextStop();
+          // We compute the id of the slide to draw
+          
+          this.currentFrame;
+          
+        }
+        
         async pause() {
           this._ensureStoppedAnimationFrame();
         }
@@ -226,6 +270,7 @@
           if (!this.isPlaying()) { // No need to draw if it’s already playing
             await this._drawFrameFromIndex(this.currentFrame);
             await this.waitRedraw();
+            this._ensureStoppedAnimationFrame(); // otherwise it thinks that it is still playing.
             console.log("we are not playing")
           } else {
             console.log("we are playing")
