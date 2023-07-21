@@ -275,6 +275,20 @@
           return await this.gotoFrame(previousStop);
         }
 
+        async gotoPreviousFrame() {
+          // First stop the play
+          this._ensureStoppedAnimationFrame()
+          const previousStop = stop || this.getPreviousStop();
+          return await this.gotoFrame(previousStop);
+        }
+
+        async gotoNextFrame() {
+          // First stop the play
+          this._ensureStoppedAnimationFrame()
+          const previousStop = stop || this.getPreviousStop();
+          return await this.gotoFrame(previousStop);
+        }
+
 
         async pause() {
           this._ensureStoppedAnimationFrame();
