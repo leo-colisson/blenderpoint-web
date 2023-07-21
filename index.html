@@ -13,6 +13,7 @@
     <button type="button" onclick="bpVideo.playAtMaxSpeed()">Play at max speed</button>
     <button type="button" onclick="bpVideo.pause()">Pause video</button>
     <button type="button" onclick="bpVideo.setCanvasFullScreen()">Fullscreen</button>
+    <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop</button><button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
     <script type="module">
       // https://github.com/josephrocca/getVideoFrames.js
       // https://stackoverflow.com/questions/32699721/javascript-extract-video-frames-reliably
@@ -35,7 +36,7 @@
           this.lastDrawnFrame = -1; // helpful to know if we need to redraw the frame or not.
           // playbackSpeed is the speed of playing: 0 means that it does not play, 1 it plays at normal speed forward,
           // -1 it plays at normal speed backward, 1.5 it plays at speed x1.5…
-          this.playbackSpeed = 0;
+          this.playbackSpeed = 1;
           this.animationFrameID = null;
           // we might also call request animation frame if the user wants to display something on screen
           // while the video is not yet loaded, use this for that use case.
@@ -57,10 +58,14 @@
           console.log(this.animationFrameID);
           return this.animationFrameID != null;
         }
-        
+
         setFps(fps) {
           this.fps = fps;
         }
+
+	setStops(stops) {
+	  this.stops = stops;
+	}
 
         // call it like:
         // <input type="file" accept="video/mp4" onchange="bpVideo.loadVideoFile(this.files[0])">
@@ -75,7 +80,7 @@
           await this.loadVideoFileFromObjectURL(videoObjectURL, config);
           URL.revokeObjectURL(file); // revoke URL to prevent memory leak
         }
-        
+
         async loadVideoFileFromObjectURL(videoObjectURL, config) {
           // We don’t know yet the number of frames
           this.total_nb_frames = 0;
@@ -83,7 +88,7 @@
           this.currentFrame = 0;
           this.lastDrawnFrame = -1;
           // direction useful to play backward.
-          this.playbackSpeed = 0;
+          this.playbackSpeed = 1;
           this.isLoadingVideo = true;
           console.log(videoObjectURL);
           self = this; // otherwise self is replaced with a new self value
@@ -92,14 +97,14 @@
             onFrame(frame) {
               self.frames.push(frame);
               if (config.onFrame) {
-                config.onFrame(frame, self.frames.length);
+		config.onFrame(frame, self.frames.length);
               }
             },
             onConfig(config) {
               self.videoWidth = config.codedWidth;
               self.videoHeight = config.codedHeight;
               if (config.onConfig) {
-                config.onConfig();
+		config.onConfig();
               }
             },
             onFinish() {
@@ -107,7 +112,7 @@
               self.isLoadingVideo = false;
               self.total_nb_frames = self.frames.length;
               if (config.onFinish) {
-                config.onFinish();
+		config.onFinish();
               }
             },
           });
@@ -177,8 +182,9 @@
             return false;
           }
         }
-        
+
         async gotoFrame(i) {
+	  console.log("goto",i);
           this._ensureStoppedAnimationFrame();
           await this._drawFrame(this.frames[i]);
           this.currentFrame = i;
@@ -188,13 +194,13 @@
           this._ensureStoppedAnimationFrame();
         }
 
-        // call "await this.waitRedraw()" to wait for animationFrame to 
+        // call "await this.waitRedraw()" to wait for animationFrame to
         waitRedraw() {
           return new Promise(resolve => {
             this.animationFrameID = requestAnimationFrame(() => {resolve()});
           });
         }
-        
+
         // play at the max FPS allowed by the screen refresh rate.
         async playAtMaxSpeed() {
           const nextFrame = this.currentFrame + 1;
@@ -210,7 +216,7 @@
         }
 
         // frame is optional, return the next stop. It might return Infinity if there is none
-        async getNextStop(frame) {
+        getNextStop(frame) {
           const initialFrame = frame || this.currentFrame;
           const st = this.stops.filter(e => e > initialFrame);
           if (st.length == 0) {
@@ -227,29 +233,44 @@
           if (st.length == 0) {
             return 0
           } else {
-            return Math.min(...st);
+            return Math.max(...st);
           }
         }
 
-        // nextstop is optional, it will be automatially computed if needed.
-        // the _ version is an auxiliary function
-        async _playUntilNextStop(nextStop) {
+        // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
+        async playUntilNextStop(stop) {
+          console.log("Next stop");
           // First stop the play
           this._ensureStoppedAnimationFrame()
           // We first compute the next stop
           const initialFrame = this.currentFrame;
-          const nextStop = nextStop || this.getNextStop();
-          // We compute the id of the slide to draw
-          
-          this.currentFrame;
-          
+          const nextStop = stop || this.getNextStop();
+          const initTime = Date.now();
+          const playAux = async () => {
+            console.log("fps",this.fps);
+	    const deltaTime = (Date.now() - initTime)/1000;
+            console.log(deltaTime, this.fps, this.playbackSpeed, nextStop)
+	    const frameToDisplay = Math.min(Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
+            console.log("frameToDisplay", frameToDisplay);
+	    const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
+            if(notTheLastOne && frameToDisplay < nextStop) {
+              console.log("will redraw");
+              await this.waitRedraw();
+              await playAux();
+            }
+            else {
+              console.log("stop");
+              this._ensureStoppedAnimationFrame();
+            }
+	  }
+          await playAux();
         }
-        
+
         async pause() {
           this._ensureStoppedAnimationFrame();
         }
 
-        async setCanvasFullScreen() { 
+        async setCanvasFullScreen() {
           /* When the openFullscreen() function is executed, open the video in fullscreen.
              Note that we must include prefixes for different browsers, as they don't support the requestFullscreen method yet */
           this.origCanvasWidth = this.canvas.width;
@@ -277,7 +298,7 @@
           }
         }
 
-        
+
         close() {
           this.frames.forEach(frame => {
             frame.close();
@@ -289,9 +310,14 @@
       window.start = async function(file) {
         console.log("Loading video");
         console.log(window.bpVideo);
-        window.bpVideo.loadVideoFileFromFile(file);        
+        window.bpVideo.loadVideoFileFromFile(file);
+	window.bpVideo.setStops([0,25,50,100]);
       }
-      
-    </script> 
+
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>
+      eruda.init();
+    </script>
   </body>
 </html>
