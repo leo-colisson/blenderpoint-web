@@ -168,10 +168,11 @@
             this._ensureStoppedAnimationFrameFetching();
             return true;
           } else if (this.isLoadingVideo) {
-            console.log("The frame is not yet ready as the video is loading.");
             return await new Promise(resolve => {
-              this.animationFrameIDFetching = requestAnimationFrame(() => {this._drawFrameFromIndex(i); resolve()});
+              this.animationFrameIDFetching = requestAnimationFrame(async () => {return await this._drawFrameFromIndex(i, silentError); resolve()});
             });
+          } else if (i = Infinity) {
+            return await this._drawFrameFromIndex(this.frames.length-1, silentError);
           } else {
             if(!silentError){
               const str = `Error: Unreachable frame (frame ${i} bigger than ${this.frames.length}).`;
@@ -186,9 +187,7 @@
         async gotoFrame(i) {
 	  console.log("goto",i);
           this._ensureStoppedAnimationFrame();
-          await this._drawFrame(this.frames[i]);
-          this.currentFrame = i;
-          this.lastDrawnFrame = i;
+          await this._drawFrameFromIndex(i);
           // triggers a refresh
           await this.waitRedraw();
           this._ensureStoppedAnimationFrame();
