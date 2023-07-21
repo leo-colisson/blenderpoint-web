@@ -13,7 +13,9 @@
     <button type="button" onclick="bpVideo.playAtMaxSpeed()">Play at max speed</button>
     <button type="button" onclick="bpVideo.pause()">Pause video</button>
     <button type="button" onclick="bpVideo.setCanvasFullScreen()">Fullscreen</button>
-    <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop</button><button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
+    <button type="button" onclick="bpVideo.gotoPreviousStop()">Previous Stop</button>
+    <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop</button>
+    <button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
     <script type="module">
       // https://github.com/josephrocca/getVideoFrames.js
       // https://stackoverflow.com/questions/32699721/javascript-extract-video-frames-reliably
@@ -226,14 +228,10 @@
         }
 
         // frame is optional
-        async getPreviousStop(frame) {
+        getPreviousStop(frame) {
           const initialFrame = frame || this.currentFrame;
           const st = this.stops.filter(e => e < initialFrame);
-          if (st.length == 0) {
-            return 0
-          } else {
-            return Math.max(...st);
-          }
+          return Math.max(0, ...st);
         }
 
         // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
@@ -268,6 +266,15 @@
 	  }
           await playAux();
         }
+
+        // stop is optional, it will be automatially computed
+        async gotoPreviousStop(stop) {
+          // First stop the play
+          this._ensureStoppedAnimationFrame()
+          const previousStop = stop || this.getPreviousStop();
+          return await this.gotoFrame(previousStop);
+        }
+
 
         async pause() {
           this._ensureStoppedAnimationFrame();
