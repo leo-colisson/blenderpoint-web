@@ -239,27 +239,31 @@
 
         // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
         async playUntilNextStop(stop) {
-          console.log("Next stop");
           // First stop the play
           this._ensureStoppedAnimationFrame()
+          // If we click while playing, we jump to the stop directly:
+          console.log("called playintul");
+          if (this.isPlayingUntil) {
+            await this.gotoFrame(this.isPlayingUntil);
+            this.isPlayingUntil = undefined;
+            return
+          }
           // We first compute the next stop
           const initialFrame = this.currentFrame;
           const nextStop = stop || this.getNextStop();
           const initTime = Date.now();
+          this.isPlayingUntil = nextStop;
           const playAux = async () => {
-            console.log("fps",this.fps);
 	    const deltaTime = (Date.now() - initTime)/1000;
-            console.log(deltaTime, this.fps, this.playbackSpeed, nextStop)
 	    const frameToDisplay = Math.min(Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
-            console.log("frameToDisplay", frameToDisplay);
 	    const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
             if(notTheLastOne && frameToDisplay < nextStop) {
-              console.log("will redraw");
               await this.waitRedraw();
               await playAux();
             }
             else {
               console.log("stop");
+              this.isPlayingUntil = undefined;
               this._ensureStoppedAnimationFrame();
             }
 	  }
