@@ -6,7 +6,7 @@
     <title>Hello World! Site Title</title>
   </head>
   <body>
-    <h1>Hello World!</h1>
+    <h1>Blenderpoint web video reader</h1>
     <canvas id="canvasEl" width="700px" height="500px"></canvas>
     <br>
     <input type="file" accept="video/mp4" onchange="start(this.files[0])"/>
@@ -14,7 +14,8 @@
     <button type="button" onclick="bpVideo.pause()">Pause video</button>
     <button type="button" onclick="bpVideo.setCanvasFullScreen()">Fullscreen</button>
     <button type="button" onclick="bpVideo.gotoPreviousStop()">Previous Stop</button>
-    <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop</button>
+    <button type="button" onclick="bpVideo.playUntilPreviousStop()">Previous Stop (continuous)</button>
+    <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop (continuous)</button>
     <button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
     <script type="module">
       // https://github.com/josephrocca/getVideoFrames.js
@@ -179,6 +180,8 @@
 
         // Basically all animations should start and stop with this._ensureStoppedAnimationFrame()
         _ensureStoppedAnimationFrame() {
+          this.isPlayingUntil = undefined;
+          this.isPlayingUntilPrevious = undefined;
           this._ensureStoppedAnimationFrameFetching();
           if (this.animationFrameID) {
             cancelAnimationFrame(this.animationFrameID)
@@ -287,13 +290,14 @@
 
         // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
         async playUntilNextStop(stop) {
-          // First stop the play
-          this._ensureStoppedAnimationFrame()
           // If we click while playing, we jump to the stop directly:
-          console.log("called playintul");
+          console.log("called playuntil");
           if (this.isPlayingUntil) {
             await this.gotoFrame(this.isPlayingUntil);
-            this.isPlayingUntil = undefined;
+            return
+          }
+          if (this.isPlayingUntilPrevious) {
+            await this.gotoFrame(this.currentFrame);
             return
           }
           // We first compute the next stop
@@ -317,13 +321,49 @@
 	  }
           await playAux();
         }
+        
+        // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
+        async playUntilPreviousStop(stop) {
+          // If we click while playing, we jump to the stop directly:
+          console.log("called playuntilprevious");
+          if (this.isPlayingUntilPrevious) {
+            await this.gotoFrame(this.isPlayingUntilPrevious);
+            return
+          }
+          // if we were playing forward, we stop here
+          if (this.isPlayingUntil) {
+            await this.gotoFrame(this.currentFrame);
+            return
+          }
+          // First stop the play
+          this._ensureStoppedAnimationFrame()
+          // We first compute the next stop
+          const initialFrame = this.currentFrame;
+          const nextStop = stop || this.getPreviousStop();
+          const initTime = Date.now();
+          this.isPlayingUntilPrevious = nextStop;
+          const playAux = async () => {
+	    const deltaTime = (Date.now() - initTime)/1000;
+	    const frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
+	    const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
+            if(notTheLastOne && frameToDisplay > nextStop) {
+              await this.waitRedraw();
+              await playAux();
+            }
+            else {
+              console.log("stop");
+              this.isPlayingUntilPrevious = undefined;
+              this._ensureStoppedAnimationFrame();
+            }
+	  }
+          await playAux();
+        }
 
         
         // stop is optional, it will be automatially computed
         async gotoPreviousStop(stop) {
           // First stop the play
           this._ensureStoppedAnimationFrame();
-          this.isPlayingUntil = undefined;
           const previousStop = stop || this.getPreviousStop();
           return await this.gotoFrame(previousStop);
         }
