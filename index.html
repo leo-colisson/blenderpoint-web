@@ -318,10 +318,12 @@
           await playAux();
         }
 
+        
         // stop is optional, it will be automatially computed
         async gotoPreviousStop(stop) {
           // First stop the play
-          this._ensureStoppedAnimationFrame()
+          this._ensureStoppedAnimationFrame();
+          this.isPlayingUntil = undefined;
           const previousStop = stop || this.getPreviousStop();
           return await this.gotoFrame(previousStop);
         }
