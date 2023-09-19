@@ -47,6 +47,7 @@
           this.animationFrameIDFetching = null;
           this.stops = []; // contains the list of stops
           this.jsonComments = []; // contains the content of the json in the comments of the video
+          this.alert = (m) => alert(m);
           // resize canvas when needed
           addEventListener("fullscreenchange", async (event) => {
             if (!document.fullscreenElement) {
@@ -59,6 +60,10 @@
           });
         }
 
+        updateAlertFunction (new_alert) {
+          this.alert = new_alert;
+        }
+        
         // extracts the json from the video
         // must be in a meta field like comment, and enclosed between BLENDERPOINTSTART and BLENDERPOINTSTOP
         extractJsonFromVideo(mp4boxfile) {
@@ -107,6 +112,7 @@
         async loadVideoFileFromObjectURL(videoObjectURL, config) {
           // We don’t know yet the number of frames
           this.total_nb_frames = 0;
+          this.frames.forEach((frame) => frame.close());
           this.frames = [];
           this.currentFrame = 0;
           this.lastDrawnFrame = -1;
@@ -120,6 +126,9 @@
             onFrame(frame) {
               self.frames.push(frame);
               // we print the first frame on screen
+              if (self.frames.length == 1) {
+                self._drawFrameFromIndex(0);
+              }
               if (config.onFrame) {
 		config.onFrame(frame, self.frames.length);
               }
@@ -137,18 +146,17 @@
                   self.jsonComments = JSON.parse(jsonComments);
                   console.log("The video contains the following json: ", self.jsonComments)
                   if (self.jsonComments.stops) {
-                    self.stops = self.jsonComments;
+                    self.stops = self.jsonComments.stops;
                   } else {
-                    alert("The metadata contains no information about stops: " + jsonComments)
+                    self.alert("The metadata contains no information about stops: " + jsonComments)
                     console.log(self.jsonComments);
                   }
                 } catch (e) {
-                  console.log(e);
-                  console.log("Error: could not load the json due to a syntax error " + jsonComments);
-                  alert("Error: could not load the json due to a syntax error");
+                  console.log("Error: could not load the json due to a syntax error " + jsonComments, e);
+                  self.alert("Error: could not load the json due to a syntax error" + jsonComments);
                 }
               } else {
-                console.log("No json in the video, need to load it manually.");
+                self.alert("No json in the video, you need to load it manually.");
               }
             },
             onFinish() {
@@ -220,7 +228,7 @@
           } else {
             if(!silentError){
               const str = `Error: Unreachable frame (frame ${i} bigger than ${this.frames.length}).`;
-              alert(str);
+              this.alert(str);
               console.log(str);
               throw new Error(str);
             }
@@ -261,6 +269,7 @@
         // frame is optional, return the next stop. It might return Infinity if there is none
         getNextStop(frame) {
           const initialFrame = frame || this.currentFrame;
+          console.log(this.stops);
           const st = this.stops.filter(e => e > initialFrame);
           if (st.length == 0) {
             return Infinity
@@ -347,7 +356,7 @@
             this.canvas.width = window.innerWidth;
             this.canvas.height = window.innerHeight;
           } else {
-            alert("Fullscreen not supported on your browser? Try a more recent browser.");
+            this.alert("Fullscreen not supported on your browser? Try a more recent browser.");
           }
           // we redraw the canvas as the canvas is cleared.
           this.redrawWhenResolutionChanges()
