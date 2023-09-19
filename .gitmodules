@@ -1,0 +1,3 @@
+[submodule "getVideoFrames.js"]
+	path = getVideoFrames.js
+	url = https://github.com/tobiasBora/getVideoFrames.js
