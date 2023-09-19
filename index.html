@@ -119,6 +119,7 @@
             videoUrl: videoObjectURL,
             onFrame(frame) {
               self.frames.push(frame);
+              // we print the first frame on screen
               if (config.onFrame) {
 		config.onFrame(frame, self.frames.length);
               }
@@ -133,13 +134,13 @@
               const jsonComments = self.extractJsonFromVideo(conf.mp4boxfile);
               if (jsonComments) {
                 try {
-                  this.jsonComments = JSON.parse(jsonComments);
-                  console.log("The video contains the following json: ", this.jsonComments)
-                  if (this.jsonComments.stops) {
-                    this.stops = this.jsonComments;
+                  self.jsonComments = JSON.parse(jsonComments);
+                  console.log("The video contains the following json: ", self.jsonComments)
+                  if (self.jsonComments.stops) {
+                    self.stops = self.jsonComments;
                   } else {
                     alert("The metadata contains no information about stops: " + jsonComments)
-                    console.log(this.jsonComments);
+                    console.log(self.jsonComments);
                   }
                 } catch (e) {
                   console.log(e);
