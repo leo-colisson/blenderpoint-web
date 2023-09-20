@@ -37,7 +37,7 @@
 
     <h2>Documentation</h2>
 
-    This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops, you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):
+    This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops (that you can obtain by using the <code>a</code> and <code>r</code> keys, cf documentation above), you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):
     <code>
       <pre>
 BLENDERPOINTSTART
@@ -50,6 +50,7 @@ BLENDERPOINTSTOP
     <h2>TODO and known bugs</h2>
     <ul>
       <li>Fix issue with large videos consuming all memory</li>
+      <li>Print a small icon when playing</li>
       <li>Make nicer GUI</li>
       <li>Document the JSON format</li>
     </ul>
@@ -81,6 +82,8 @@ BLENDERPOINTSTOP
           // playbackSpeed is the speed of playing: 0 means that it does not play, 1 it plays at normal speed forward,
           // -1 it plays at normal speed backward, 1.5 it plays at speed x1.5…
           this.playbackSpeed = 1;
+          this.isPlayingUntil = undefined;
+          this.isPlayingUntilPrevious = undefined;
           this.animationFrameID = null;
           // we might also call request animation frame if the user wants to display something on screen
           // while the video is not yet loaded, use this for that use case.
@@ -413,16 +416,17 @@ BLENDERPOINTSTOP
             console.log("The file is not yet ready, wait a bit more.");
             return
           }
-          if (this.isPlayingUntil) {
+          if (this.isPlayingUntil != undefined) {
             console.log("I am playing until");
             await this.gotoFrame(this.isPlayingUntil);
             return
           }
-          if (this.isPlayingUntilPrevious) {
+          if (this.isPlayingUntilPrevious != undefined) {
             console.log("I am playing until previous");
             await this.gotoFrame(this.currentFrame);
             return
           }
+          console.log("We were apparently not playing");
           // We first compute the next stop
           const initialFrame = this.currentFrame;
           const nextStop = stop || this.getNextStop();
@@ -454,12 +458,12 @@ BLENDERPOINTSTOP
           }
           // If we click while playing, we jump to the stop directly:
           console.log("called playuntilprevious");
-          if (this.isPlayingUntilPrevious) {
+          if (this.isPlayingUntilPrevious != undefined) {
             await this.gotoFrame(this.isPlayingUntilPrevious);
             return
           }
           // if we were playing forward, we stop here
-          if (this.isPlayingUntil) {
+          if (this.isPlayingUntil != undefined) {
             await this.gotoFrame(this.currentFrame);
             return
           }
@@ -468,7 +472,9 @@ BLENDERPOINTSTOP
           // We first compute the next stop
           const initialFrame = this.currentFrame;
           const nextStop = stop || this.getPreviousStop();
+          console.log("Will play until ", nextStop);
           const initTime = Date.now();
+          console.log(nextStop);
           this.isPlayingUntilPrevious = nextStop;
           const playAux = async () => {
 	    const deltaTime = (Date.now() - initTime)/1000;
@@ -689,7 +695,7 @@ BLENDERPOINTSTOP
       });
       window.start = async function(file) {
         console.log("Loading video");
-        console.log(window.bpVideo);
+          console.log(window.bpVideo);
         window.bpVideo.loadVideoFileFromFile(file);
 	/* window.bpVideo.setStops([0,25,50,100]); */
       }
