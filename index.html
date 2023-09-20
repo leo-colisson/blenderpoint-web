@@ -17,6 +17,44 @@
     <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop (continuous)</button>
     <button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
     <button type="button" onclick="bpVideo.playAtMaxSpeed()">Play at max speed</button>
+
+    <h2>Shortcuts</h2>
+    <ul>
+      <li><code>Arrow keys</code> or left/right click on the canvas: next/previous stop (continous: double press if you do not want to play the full animation)</li>
+      <li><code>p</code>: play/pause without stopping</li>
+      <li><code>n</code>: go to the next frame</li>
+      <li><code>b</code>: go to the previous frame (b = backward)</li>
+      <li><code>Home</code>: go to first frame</li>
+      <li><code>End</code>: go to last frame</li>
+      <li><code>F</code>: enable full screen (quit with Esc)</li>
+      <li><code>f</code>: go to a specific frame</li>
+      <li><code>g</code>: go to a specific page</li>
+      <li><code>l</code>: print information on the current frame in the console (<code>F12 > console</code>)</li>
+      <li><code>a</code>: add current frame to stops, and print the list of stops in the console (<code>F12 > console</code>)</li>
+      <li><code>r</code>: remove current frame from stops</li>
+      <li><code>S</code>: manually specify the list of stops</li>
+    </ul>
+
+    <h2>Documentation</h2>
+
+    This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops, you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):
+    <code>
+      <pre>
+BLENDERPOINTSTART
+{"stops": [1,5,10]}
+BLENDERPOINTSTOP
+      </pre>
+    </code>
+    This format allows more advanced options, for instance to provide information on the original position of a frame in a clip that will be documented later.
+
+    <h2>TODO and known bugs</h2>
+    <ul>
+      <li>Fix issue with large videos consuming all memory</li>
+      <li>Make nicer GUI</li>
+      <li>Document the JSON format</li>
+    </ul>
+    
+    
     <script type="module">
       // https://github.com/josephrocca/getVideoFrames.js
       // https://stackoverflow.com/questions/32699721/javascript-extract-video-frames-reliably
@@ -146,6 +184,17 @@
               self.videoHeight = conf.codedHeight;
               if (config.onConfig) {
 		config.onConfig();
+              }
+              console.log(conf.mp4boxFile);
+              console.log(conf.info);
+              const fps = conf.info.videoTracks[0].nb_samples / (conf.info.videoTracks[0].samples_duration / conf.info.videoTracks[0].timescale);
+              console.log("fps", fps);
+              if (fps < 120) {
+                this.fps = fps;
+                console.log("Setting fps to " + fps);
+              } else {
+                console.log("Found weird fps settings, default to 24fps: " + fps);
+                this.fps = fps;
               }
               // self.mp4boxFile = conf.mp4boxFile;
               const jsonComments = self.extractJsonFromVideo(conf.mp4boxFile);
@@ -305,6 +354,15 @@
           }
         }
 
+        async specifyStopsGui(i) {
+          const answer = prompt("Provide the list of stops to use (e.g. '1, 2, 3').");
+          if (answer) {
+            this.stops = [...new Set(answer.split(",").map(e => parseInt(e)))].sort(function(a, b) {
+              return a - b;
+            });
+          }
+        }
+        
         
         // call "await this.waitRedraw()" to wait for animationFrame to
         waitRedraw() {
@@ -603,7 +661,7 @@
               case "a":
                 this.stops = [...new Set([...this.stops, this.currentFrame])].sort(function(a, b) {
                   return a - b;
-                })
+                });
                 console.log(this.stops);
                 break;
                 // r for "remove current frame to stops"
@@ -614,6 +672,10 @@
                 // s for "search based on name of the frame"
                 // TODO: implement
               case "s":
+                break;
+                // specify stops
+              case "S":
+                this.specifyStopsGui();
                 break;
             }
           });
