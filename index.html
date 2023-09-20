@@ -7,6 +7,7 @@
   </head>
   <body>
     <h1>Blenderpoint web video reader</h1>
+    <p>To load the demo, click <a href="index.html?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4">here</a>.</p>
     <canvas id="canvasEl" width="700px" height="500px"></canvas>
     <br>
     <input type="file" accept="video/mp4" onchange="start(this.files[0])"/>
@@ -37,15 +38,26 @@
 
     <h2>Documentation</h2>
 
-    This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops (that you can obtain by using the <code>a</code> and <code>r</code> keys, cf documentation above), you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):
+    <p>This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops (that you can obtain by using the <code>a</code> and <code>r</code> keys, cf documentation above), you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):</p>
+    
     <code>
       <pre>
 BLENDERPOINTSTART
 {"stops": [1,5,10]}
-BLENDERPOINTSTOP
-      </pre>
+BLENDERPOINTSTOP</pre>
     </code>
-    This format allows more advanced options, for instance to provide information on the original position of a frame in a clip that will be documented later.
+    <p>This format allows more advanced options, for instance to provide information on the original position of a frame in a clip that will be documented later.</p>
+    <p>You can also load videos from an url: just add the (url encoded) url into the url of this page:
+      <code>
+        <pre>
+https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4</pre>
+      </code>
+      You can also specify the stops in the url directly if your video does not have it encoded:
+      <code>
+        <pre>
+https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4&stops=10,20,50</pre>
+      </code>      
+    </p>
 
     <h2>TODO and known bugs</h2>
     <ul>
@@ -142,6 +154,16 @@ BLENDERPOINTSTOP
 	  this.stops = stops;
 	}
 
+        getStops() {
+	  return this.stops;
+	}
+
+	setStopsFromString(stops) {
+	  this.stops = [...new Set(stops.split(",").map(e => parseInt(e)))].sort(function(a, b) {
+              return a - b;
+          });
+	}
+
         // call it like:
         // <input type="file" accept="video/mp4" onchange="bpVideo.loadVideoFile(this.files[0])">
         // config might contain additional parameters, notably callbacks
@@ -156,7 +178,11 @@ BLENDERPOINTSTOP
           URL.revokeObjectURL(file); // revoke URL to prevent memory leak
         }
 
+        // You can pass both object url, or normal url like https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4
         async loadVideoFileFromObjectURL(videoObjectURL, config) {
+          if (!config) {
+            config = {};
+          }
           // turn to true when the stops are obtained
           this.isReady = false;
           this._ensureStoppedAnimationFrame();
@@ -206,11 +232,20 @@ BLENDERPOINTSTOP
                 try {
                   self.jsonComments = JSON.parse(jsonComments);
                   console.log("The video contains the following json: ", self.jsonComments)
-                  if (self.jsonComments.stops) {
-                    self.stops = self.jsonComments.stops;
+                  if (config.stops) {
+                    if (typeof config.stops === 'string' || config.stops instanceof String) {
+                      self.setStopsFromString(config.stops);
+                    } else {
+                      self.setStops(config.stops);
+                    }
+                    console.log("We got from the configuration the following list of stops:", self.stops);
                   } else {
-                    self.alert("The metadata contains no information about stops: " + jsonComments)
-                    console.log(self.jsonComments);
+                    if (self.jsonComments.stops) {
+                      self.stops = self.jsonComments.stops;
+                    } else {
+                      self.alert("The metadata contains no information about stops: " + jsonComments)
+                      console.log(self.jsonComments);
+                    }
                   }
                 } catch (e) {
                   console.log("Error: could not load the json due to a syntax error " + jsonComments, e);
@@ -582,7 +617,7 @@ BLENDERPOINTSTOP
           }
           return data;
         }
-            
+        
         logFrame(frame) {
           var info = this.getInfoOnFrame(frame);
           var message = "The final frame number is " + info.frame;
@@ -696,10 +731,28 @@ BLENDERPOINTSTOP
       });
       window.start = async function(file) {
         console.log("Loading video");
-          console.log(window.bpVideo);
+        console.log(window.bpVideo);
         window.bpVideo.loadVideoFileFromFile(file);
 	/* window.bpVideo.setStops([0,25,50,100]); */
       }
+      document.addEventListener('DOMContentLoaded', async () => {
+        // we try to find a video in the url
+        const queryString = window.location.search;
+        const urlParams = new URLSearchParams(queryString);
+        const video = urlParams.get('video');
+        const stops = urlParams.get('stops');
+        if (video) {
+          console.log("We will load ", video);
+          await window.bpVideo.loadVideoFileFromObjectURL(decodeURI(video), {
+            stops: stops
+          });
+          /* if (stops) {
+           *   window.bpVideo.setStopsFromString(stops);
+           *   console.log("stops configured from url: ", window.bpVideo.getStops());
+           * } */
+        }
+      }, false);
+
 
     </script>
     <!-- <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
