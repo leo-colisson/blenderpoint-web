@@ -7,7 +7,6 @@
   </head>
   <body>
     <h1>Blenderpoint web video reader</h1>
-    <p>To load the demo, click <a href="index.html?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4">here</a>.</p>
     <canvas id="canvasEl" width="700px" height="500px"></canvas>
     <br>
     <input type="file" accept="video/mp4" onchange="start(this.files[0])"/>
@@ -18,6 +17,7 @@
     <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop (continuous)</button>
     <button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
     <button type="button" onclick="bpVideo.playAtMaxSpeed()">Play at max speed</button>
+    <p>To load the demo, click <a href="index.html?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4">here</a>.</p>
 
     <h2>Shortcuts</h2>
     <ul>
@@ -61,7 +61,6 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
 
     <h2>TODO and known bugs</h2>
     <ul>
-      <li>Print a clear error message on firefox (or even better: support firefox, might be non trivial as it needs webcodec)</li>
       <li>Fix issue with large videos consuming all memory</li>
       <li>Print a small icon when playing</li>
       <li>Make nicer GUI</li>
@@ -736,6 +735,10 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
 	/* window.bpVideo.setStops([0,25,50,100]); */
       }
       document.addEventListener('DOMContentLoaded', async () => {
+        // Check if supported
+        if (typeof VideoDecoder == "undefined") {
+          alert("It seems like you cannot use WebCodecs which are needed by this library. While Chrome supports this feature, Firefox lacks it: https://https://caniuse.com/webcodecs. If your browser supports it, make sure that you load this page from an https page or a localhost server as WebCodecs need a secure context.")
+        }
         // we try to find a video in the url
         const queryString = window.location.search;
         const urlParams = new URLSearchParams(queryString);
