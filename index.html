@@ -69,6 +69,14 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
     
     
     <script type="module">
+      // https://github.com/w3c/webcodecs/issues/87
+      // Terminology:
+      // track sample = frames (from https://github.com/gpac/mp4box.js: nb_samples: Number, giving the number of track samples (i.e. frames),)
+      // onSamples: every time mp4box reads 1000 frames, it sends it to onSamples. Each frame has its own position, whether it is a key frame or a delta frame (.is_sync), a duration (make sure to devide by timescale to get the right thing)
+      // random access point (rap): insert key frames at random points in the video https://aws.amazon.com/fr/blogs/media/part-1-back-to-basics-gops-explained/
+      // Example with web worker and really quick animation (it drops frame if not ready to display)
+      // https://github.com/w3c/webcodecs/blob/main/samples/video-decode-display/index.html
+      
       // https://github.com/josephrocca/getVideoFrames.js
       // https://stackoverflow.com/questions/32699721/javascript-extract-video-frames-reliably
       /* import getVideoFrames from "https://deno.land/x/get_video_frames@v0.0.9/mod.js" */
@@ -159,7 +167,7 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
 
 	setStopsFromString(stops) {
 	  this.stops = [...new Set(stops.split(",").map(e => parseInt(e)))].sort(function(a, b) {
-              return a - b;
+            return a - b;
           });
 	}
 
