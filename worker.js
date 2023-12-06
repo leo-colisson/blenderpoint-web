@@ -385,7 +385,7 @@ class GetAnyFrame {
   }
 
   async _flushAndGarbageCollect(fromFrame, toFrameExcluded) {
-    await this.decoder.flush();
+    // await this.decoder.flush();
     // We garbage collect useless frames
     this._garbageCollectFrames(fromFrame, toFrameExcluded)
   }
