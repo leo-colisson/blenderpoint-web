@@ -167,7 +167,7 @@ class GetAnyFrame {
     // elements between two key frames, in my tests it is often around 250). But we will start to
     // garbage collect when we go over this limit after caching these elements, so in total we can go up to
     // roughly this.maxNumberCachedFrames + 250. Note that the chunk just loaded cannot be garbage collected.
-    this.maxNumberCachedFrames = userConfig.maxNumberCachedFrames || 10;
+    this.maxNumberCachedFrames = userConfig.maxNumberCachedFrames || 50;
     this.nbFramesDecodeInAdvance = userConfig.minNumberCachedFrames || 3;
     this.minNumberCachedFrames = Math.max(this.nbFramesDecodeInAdvance, userConfig.minNumberCachedFrames || 3);
     this.maxDecodeQueueSize = Math.max(this.minNumberCachedFrames, userConfig.maxDecodeQueueSize || 3);
@@ -305,7 +305,7 @@ class GetAnyFrame {
     var idFrame = this.idOfNextDecodedKeyFrame;
     this.idOfNextDecodedKeyFrame++;
     // We add the frame to the cache
-    console.log("We are adding to the cache the frame", idFrame);
+    console.log("We are adding to the cache the frame", idFrame, "with priority", this.nextPriorityRemove);
     this.cachedFrames.set(idFrame, {
       frame: frame,
       lastAccessed: this.nextPriorityRemove
@@ -327,7 +327,7 @@ class GetAnyFrame {
     if(this.cachedFrames.size - 1 > this.maxNumberCachedFrames) {
       // We sort the element to remove them.
       // .entries outputs an array [key, value]
-      const orderedElements = [...this.cachedFrames.entries()].filter(x => x[1].priorityRemove != Infinity && x[0] >= fromIdFrameNotToGarbageCollect && x[0] < toExcludedIdFrameNotToGarbageCollect).sort((a, b) => a[1].priorityRemove - b[1].priorityRemove);
+      const orderedElements = [...this.cachedFrames.entries()].filter(x => x[1].priorityRemove != Infinity && (x[0] < fromIdFrameNotToGarbageCollect || x[0] >= toExcludedIdFrameNotToGarbageCollect)).sort((a, b) => a[1].priorityRemove - b[1].priorityRemove);
       // nb elements beginning: this.cachedFrames.size
       // nb elements end: this.minNumberCachedFrames
       // nb elements to remove = 
@@ -339,10 +339,10 @@ class GetAnyFrame {
         this.cachedFrames.get(orderedElements[i][0]).frame.close();
         this.cachedFrames.delete(orderedElements[i][0]);
         orderedElements[i][1].frame.close();
-        console.log("garbage just closed frame", i);
+        console.log("garbage just closed frame", orderedElements[i][0]);
       }
     }
-    console.log("garbage: remaining items", this.cachedFrames.size);
+    console.log("garbage ending items", this.cachedFrames.size);
   }
 
   // Make sure that all elements between idFrom and idToExcluded are in the cache. It returns the last element
@@ -375,7 +375,10 @@ class GetAnyFrame {
     if (idFrom >= this.idOfNextDecodedKeyFrame && this.idOfNextDecodedKeyFrame !== null && this.allNonDecodedFrames[idFrom].idParentKeyFrame == this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame) {
       console.log("I can just continue my usual work, starting to decode frame ", this.nextFrameToAskForDecode);
     } else {
-      console.log("_forceAddInCache: We need to reset", idFrom, this.idOfNextDecodedKeyFrame, this.idOfNextDecodedKeyFrame, this.allNonDecodedFrames[idFrom].idParentKeyFrame, this.idOfNextDecodedKeyFrame === null ? "nope" : this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame);
+      console.log("_forceAddInCache: We need to reset", idFrom, this.idOfNextDecodedKeyFrame, this.idOfNextDecodedKeyFrame)
+      console.log("_forceAddInCache", this.allNonDecodedFrames[idFrom].idParentKeyFrame);
+      // TODO: here idOfNextDecodedKeyFrame gets too big, and is not reset when we replay
+      console.log("_forceAddInCache", this.idOfNextDecodedKeyFrame === null ? "nope" : this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame);
       // We restart from a completely unrelated keyframe: we need to reset the decoder. If not we reset:
       this.decoder.reset();
       // Resetting also gets rid of the configuration, so we need to reconfigure it (not sure if we lose
@@ -435,6 +438,17 @@ class GetAnyFrame {
     }
     return nextElementToDecode;
   }
+
+  async _forceAddInCacheAndGarbageCollect(idFrom, idToExcluded, idFromGC, idToGC) {
+    await this._forceAddInCache(idFrom, idToExcluded);
+    if (idToGC === undefined) {
+      idToGC = this.nextFrameToAskForDecode;
+    }
+    if (idFromGC === undefined) {
+      idFromGC = idFrom;
+    }
+    this._garbageCollectFrames(idFromGC, idToGC);
+  }
   
   // distance is the number of frame to try before giving up. Return either null or the id of the first frame
   _findFirstNonCachedFrame(idFrame, distance) {
@@ -469,21 +483,22 @@ class GetAnyFrame {
         const firstNonCachedFrame = this._findFirstNonCachedFrame(i, this.nbFramesDecodeInAdvance);
         console.log("firstNonCachedFrame=",firstNonCachedFrame, "at distance smaller than ", this.nbFramesDecodeInAdvance, this.cachedFrames.has(i+this.nbFramesDecodeInAdvance), this.cachedFrames);
         if (firstNonCachedFrame != -1) {
-          nextElementToDecode = await this._forceAddInCache(firstNonCachedFrame, i + this.nbFramesDecodeInAdvance + 1);
+          // We do not use await on purpose, otherwise it might slow down the process when it fetches new stuff
+          this._forceAddInCacheAndGarbageCollect(firstNonCachedFrame, i + this.nbFramesDecodeInAdvance + 1,i);
         }
-        this._garbageCollectFrames(i, nextElementToDecode);
       }
       return this.cachedFrames.get(i).frame;
     } else {
       console.log("Frame", i, "NOT in the cache.")
       if(backward) {
         // For backward, we don't care te preserve the cache since it is in the other direction.
-        await this._forceAddInCache(this.allNonDecodedFrames[i].idParentKeyFrame, i + 1);
-        this._garbageCollectFrames(this.allNonDecodedFrames[i].idParentKeyFrame, i + 1);
+        this._forceAddInCacheAndGarbageCollect(
+          this.allNonDecodedFrames[i].idParentKeyFrame, i + 1,
+          this.allNonDecodedFrames[i].idParentKeyFrame, i + 1
+        );
       } else {
         console.log("We will add in the cache", i, i + this.nbFramesDecodeInAdvance + 1);
-        nextElementToDecode = await this._forceAddInCache(i, i + this.nbFramesDecodeInAdvance + 1);
-        this._garbageCollectFrames(i, nextElementToDecode);
+        this._forceAddInCacheAndGarbageCollect(i, i + this.nbFramesDecodeInAdvance + 1);
       }
       // If the decoder saturated, the frame might not be ready yet.
       if(!this.cachedFrames.has(i)) {
