@@ -2,6 +2,7 @@
 // https://w3c.github.io/webcodecs/samples/video-decode-display/
 
 const currentWorker = self;
+const wait = (n) => new Promise((resolve) => setTimeout(resolve, n));
 
 class MyMP4FileSink {
   #setStatus = null;
@@ -166,8 +167,10 @@ class GetAnyFrame {
     // elements between two key frames, in my tests it is often around 250). But we will start to
     // garbage collect when we go over this limit after caching these elements, so in total we can go up to
     // roughly this.maxNumberCachedFrames + 250. Note that the chunk just loaded cannot be garbage collected.
-    this.maxNumberCachedFrames = userConfig.maxNumberCachedFrames || 100;
-    this.minNumberCachedFrames = userConfig.minNumberCachedFrames || 50;
+    this.maxNumberCachedFrames = userConfig.maxNumberCachedFrames || 10;
+    this.nbFramesDecodeInAdvance = userConfig.minNumberCachedFrames || 3;
+    this.minNumberCachedFrames = Math.max(this.nbFramesDecodeInAdvance, userConfig.minNumberCachedFrames || 3);
+    this.maxDecodeQueueSize = Math.max(this.minNumberCachedFrames, userConfig.maxDecodeQueueSize || 3);
     // cachedFrames[i] = {
     //   frame: frame,
     //   priorityRemove: // higher says that the image should be garbage collected later. Infinity means that
@@ -240,6 +243,11 @@ class GetAnyFrame {
       },
     });
 
+    // To avoid race conditions, cf _forceAddInCache
+    this.forceAddInCacheCounter = 0;
+
+    // So that we know if we need to reset or not
+    this.nextFrameToAskForDecode = 0;
   }
 
   getVideoWidth() {
@@ -253,7 +261,7 @@ class GetAnyFrame {
   _onConfig(userConfig, config) {
     if(userConfig.onConfigDemuxer) userConfig.onConfigDemuxer(config);
     this.decoderConfig = config;
-    // this.decoderConfig.optimizeForLatency = true;
+    this.decoderConfig.optimizeForLatency = true;
     this.videoWidth = config.codedWidth;
     this.videoHeight = config.codedHeight;
     const fps = config.info.videoTracks[0].nb_samples / (config.info.videoTracks[0].samples_duration / config.info.videoTracks[0].timescale);
@@ -297,6 +305,7 @@ class GetAnyFrame {
     var idFrame = this.idOfNextDecodedKeyFrame;
     this.idOfNextDecodedKeyFrame++;
     // We add the frame to the cache
+    console.log("We are adding to the cache the frame", idFrame);
     this.cachedFrames.set(idFrame, {
       frame: frame,
       lastAccessed: this.nextPriorityRemove
@@ -308,13 +317,17 @@ class GetAnyFrame {
   // We can specify an element not to garbage collect (useful to keey the last value that was decoded)
   // Cleans the frame to ensure the memory contains only a small number of decoded frames.
   _garbageCollectFrames(fromIdFrameNotToGarbageCollect, toExcludedIdFrameNotToGarbageCollect) {
+    // If there were an error, for instance we stopped the function due to a race condition, no need to garbage
+    // collect now.
+    if(toExcludedIdFrameNotToGarbageCollect < 0) {
+      return;
+    };
+    console.log("garbage starting items", this.cachedFrames.size);
     // we add a -1 so that we do not count the current frame
     if(this.cachedFrames.size - 1 > this.maxNumberCachedFrames) {
       // We sort the element to remove them.
       // .entries outputs an array [key, value]
       const orderedElements = [...this.cachedFrames.entries()].filter(x => x[1].priorityRemove != Infinity && x[0] >= fromIdFrameNotToGarbageCollect && x[0] < toExcludedIdFrameNotToGarbageCollect).sort((a, b) => a[1].priorityRemove - b[1].priorityRemove);
-      // We prune the smallest elements. elementToRemove is the position of the next element to remove.
-      var elementToRemove = 0;
       // nb elements beginning: this.cachedFrames.size
       // nb elements end: this.minNumberCachedFrames
       // nb elements to remove = 
@@ -325,69 +338,214 @@ class GetAnyFrame {
       for (var i=0; i < nbElementsToRemove; i++) {
         this.cachedFrames.get(orderedElements[i][0]).frame.close();
         this.cachedFrames.delete(orderedElements[i][0]);
+        orderedElements[i][1].frame.close();
+        console.log("garbage just closed frame", i);
       }
     }
+    console.log("garbage: remaining items", this.cachedFrames.size);
+  }
+
+  // Make sure that all elements between idFrom and idToExcluded are in the cache. It returns the last element
+  // that was send to decode (might be larger, like +10 due to latency of codec), useful for preserving it in the cache.
+  async _forceAddInCache(idFrom, idToExcluded) {
+    // We want to make sure we do not call this function twice (race conditions on the decoder could be fairly bad).
+    // So we increment a public counter when we start this function, and all functions that are currently running
+    // with a lower counter stop. Seems there is no other way?
+    // https://stackoverflow.com/questions/26298500/stop-pending-async-function-in-javascript
+    this.forceAddInCacheCounter++; // We increment the counter to invalid it
+    const currentForceAddInCacheCounter = this.forceAddInCacheCounter;
+    console.log("Starting _forceAddInCache with id", currentForceAddInCacheCounter, "from", idFrom, "to", idToExcluded);
+    // Make sure they are not too large, and properly ordered
+    if(idFrom >= this.allNonDecodedFrames.length) { return -1 }
+    idToExcluded = Math.min(idToExcluded, this.allNonDecodedFrames.length);
+    if(idFrom >= idToExcluded) { return -1 }
+
+    // Depending on the codec, we might need to push many (~10?) frames until seing a frame.
+    // https://github.com/w3c/webcodecs/issues/753
+    // So the trick (also for efficiency), is to send decode messages until we see enough messages.
+    // In the examble https://webcodecs-samples.netlify.app/audio-video-player/audio_video_player.html
+    // they even try to saturate the decoder by keeping sending decode messages until the queue starts to grow.
+    // Let us try.
+    
+    // We check if we can continue from where we are right now
+    var nextElementToDecode = null;
+    // If we are after the frame that will be decoded next, and if we share the same parent key, we can
+    // just continue to decode normally, otherwise we first need to reset:
+    console.log(idFrom, this.allNonDecodedFrames[idFrom].idParentKeyFrame, this.idOfNextDecodedKeyFrame);
+    if (idFrom >= this.idOfNextDecodedKeyFrame && this.idOfNextDecodedKeyFrame !== null && this.allNonDecodedFrames[idFrom].idParentKeyFrame == this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame) {
+      console.log("I can just continue my usual work, starting to decode frame ", this.nextFrameToAskForDecode);
+    } else {
+      console.log("_forceAddInCache: We need to reset", idFrom, this.idOfNextDecodedKeyFrame, this.idOfNextDecodedKeyFrame, this.allNonDecodedFrames[idFrom].idParentKeyFrame, this.idOfNextDecodedKeyFrame === null ? "nope" : this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame);
+      // We restart from a completely unrelated keyframe: we need to reset the decoder. If not we reset:
+      this.decoder.reset();
+      // Resetting also gets rid of the configuration, so we need to reconfigure it (not sure if we lose
+      // efficiency here, but this is done only when we do a jump of frames)
+      this.decoder.configure(this.decoderConfig);
+      // If we reset, we need to restart from a key frame:
+      console.log("this.allNonDecodedFrames[idFrom]", idFrom, this.allNonDecodedFrames[idFrom]);
+      nextElementToDecode = this.allNonDecodedFrames[idFrom].idParentKeyFrame;
+      this.idOfNextDecodedKeyFrame = nextElementToDecode;
+      this.nextFrameToAskForDecode = nextElementToDecode;
+      /* for(var j = this.allNonDecodedFrames[idFrom].idParentKeyFrame; j < idToExcluded; j++){
+       *   console.log("_forceAddInCache: decode ", j);
+       *   this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
+       * } */
+    } 
+    console.log("We will start by decoding", this.nextFrameToAskForDecode);
+    // We send decode until we find our beloved element (we can also try to saturate even more if needed
+    // as done in the example). But before we remove the last element in case it is already in the cache.
+    if (this.cachedFrames.has(idToExcluded)) {
+      this.cachedFrames.get(idToExcluded).frame.close();
+      this.cachedFrames.delete(idToExcluded);
+    }
+    while (!this.cachedFrames.has(idToExcluded)) {
+      // Someone else started to run this function. Let us stop then.
+      if (this.forceAddInCacheCounter != currentForceAddInCacheCounter) {
+        console.log("Someone else is calling me: we stop now.");
+        return -2;
+      }
+      if (this.decoder.decodeQueueSize > this.maxDecodeQueueSize) {
+        console.log("The decoder is overwhelmed, let's wait before sending new stuff in the queue of size: ", this.decoder.decodeQueueSize);
+      } else {
+        console.log("Starting to decoding frame ", this.nextFrameToAskForDecode, this.decoder.decodeQueueSize, this.maxDecodeQueueSize);
+        this.decoder.decode(this.allNonDecodedFrames[this.nextFrameToAskForDecode].nonDecodedFrame);
+        this.nextFrameToAskForDecode++;
+        if(this.nextFrameToAskForDecode >= this.allNonDecodedFrames.length) {
+          // We arrived at the end of the video: let us flush (unless someone else is already running this function)
+          const mustAbort = await (() => {
+            if (this.forceAddInCacheCounter != currentForceAddInCacheCounter) {
+              return false;
+            } else {
+              this.decoder.flush();
+              return true;
+            }
+          })();
+          if (mustAbort) {
+            return -2
+          } else {
+            return nextElementToDecode;
+          }
+        }
+      }
+      // since the decoding is asynchronously done, we need to stop temporarily the code to give
+      // time to the decoder to run.
+      // This is needed, otherwise the decoder will not have time to start its job and we will get into
+      // an infinite loop.
+      await wait(0);
+    }
+    return nextElementToDecode;
+  }
+  
+  // distance is the number of frame to try before giving up. Return either null or the id of the first frame
+  _findFirstNonCachedFrame(idFrame, distance) {
+    for (var j=0; j <= distance; j++) {
+      if(!this.cachedFrames.has(idFrame+j)) {
+        return idFrame+j;
+      }
+    }
+    return -1;
   }
   
   // TODO: make it work also if the frame is not yet available (loading video), or if i = Infinity to get the
   // last frame. Get inspired by commented code in _drawFrameFromIndex
   // TODO: throw error if i is too big. silentError is optional (boolean whether raise error or output false)
-  async getFrame(i, silentError) {
-    // If we were already trying to get an image, we stop it now.
+  // The backward is an indication that we should store more frames in the cache not to always recompute the sames
+  async getFrame(i, silentError, backward) {
+    // If we were already trying to get an image, we stop the older one.
     if (this.getFrameListener) {
       self.removeEventListener("newCachedFrame", this.getFrameListener);
       this.getFrameListener = null;
     }
+    // TODO: make it more robust to race conditions.
     console.log("Calling getFrame with i=", i);
+    // Will contain the result of _forceAddInCache
+    var nextElementToDecode = -1;
     if (this.cachedFrames.has(i)) {
       console.log("Frame", i, "already cached.")
+      // The frame is already in the cache.
+      // This is cool to see a cached frame, but we want to start the decoding of the next frames to have them
+      // in due time. No need to do this optimization if we run backward (or at least not this way).
+      if(!backward) {
+        const firstNonCachedFrame = this._findFirstNonCachedFrame(i, this.nbFramesDecodeInAdvance);
+        console.log("firstNonCachedFrame=",firstNonCachedFrame, "at distance smaller than ", this.nbFramesDecodeInAdvance, this.cachedFrames.has(i+this.nbFramesDecodeInAdvance), this.cachedFrames);
+        if (firstNonCachedFrame != -1) {
+          nextElementToDecode = await this._forceAddInCache(firstNonCachedFrame, i + this.nbFramesDecodeInAdvance + 1);
+        }
+        this._garbageCollectFrames(i, nextElementToDecode);
+      }
       return this.cachedFrames.get(i).frame;
     } else {
       console.log("Frame", i, "NOT in the cache.")
-      // Note that we can only (efficiently) decode all elements between two key frames in one go.
-      // First, we check if the frame is currently in the queue of frames to decode:
-      if (this.idOfNextDecodedKeyFrame !== null && i >= this.idOfNextDecodedKeyFrame && i < this.idOfNextDecodedKeyFrame + this.decoder.decodeQueueSize) {
-        console.log("But, it is already in the queue to be processed");
+      if(backward) {
+        // For backward, we don't care te preserve the cache since it is in the other direction.
+        await this._forceAddInCache(this.allNonDecodedFrames[i].idParentKeyFrame, i + 1);
+        this._garbageCollectFrames(this.allNonDecodedFrames[i].idParentKeyFrame, i + 1);
       } else {
-        // We first check if some items are still in the queue (might occur if getFrame is called twice before
-        // the first finishes). If so we reset everything:
-        if (this.decoder.decodeQueueSize != 0) {
-          // We restart from a completely unrelated keyframe: we need to reset the decoder
-          this.decoder.reset();
-          // Resetting also gets rid of the configuration, so we need to reconfigure it (not sure if we lose
-          // efficiency here, but this is done only when we do a jump of frames)
-          this.decoder.configure(this.decoderConfig);
-        }
-        this.idOfNextDecodedKeyFrame = this.allNonDecodedFrames[i].idParentKeyFrame;
-        /* console.log("In getFrame() this.idOfNextDecodedKeyFrame", this.idOfNextDecodedKeyFrame);
-         * console.log("We will loop from", this.idOfNextDecodedKeyFrame, "to", i); */
-        // We need to decode all frames from the last key frame:
-        for (var j=this.idOfNextDecodedKeyFrame; j < this.allNonDecodedFrames[i].idNextKeyFrame; j++) {
-          // console.log("We will decode 1:", this.allNonDecodedFrames[j].nonDecodedFrame);
-          this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
-        }
-        // We queued all frames to decode, we wait for the decoding to finish:
-        // await this.decoder.flush();
-        // Arg, we don't want to flush, otherwise we need to send a key frame the next time.
-        // https://github.com/w3c/webcodecs/issues/220
-        // and for efficiency reasons, I don't want to decode 250 frames just to print the current frame.
-        // Let's implement our own flush (actually it has some advantages, for instance we can ask to decode in
-        // advance a few frames, just make sure to add some stuff to be sure we are not garbage collected)
-        // Arggg 2: the decoder will not event start if we do not actually flush (or rather it will start after
-        // a few frames). So let's combine both methods: we flush, but in a non-blocking way to stop before:
-        this._flushAndGarbageCollect(this.idOfNextDecodedKeyFrame, this.allNonDecodedFrames[i].idNextKeyFrame); // Do NOT use await here.
+        console.log("We will add in the cache", i, i + this.nbFramesDecodeInAdvance + 1);
+        nextElementToDecode = await this._forceAddInCache(i, i + this.nbFramesDecodeInAdvance + 1);
+        this._garbageCollectFrames(i, nextElementToDecode);
       }
-      await waitEventUntil(self, "newCachedFrame", () => this.cachedFrames.has(i), (l) => {
-        this.getFrameListener = l
-      });
+      // If the decoder saturated, the frame might not be ready yet.
+      if(!this.cachedFrames.has(i)) {
+        console.log("The frame is not arrived yet, I'm waiting for it to come…");
+        console.log("this.decoder.decodeQueueSize", this.decoder.decodeQueueSize);
+        await waitEventUntil(self, "newCachedFrame", () => this.cachedFrames.has(i), (l) => {
+          this.getFrameListener = l
+        });
+      }
+      console.log("We received the frame");
       return this.cachedFrames.get(i).frame;
+      
+////      // Note that we can only (efficiently) decode all elements between two key frames in one go.
+////      // First, we check if the frame is currently in the queue of frames to decode:
+////      if (this.idOfNextDecodedKeyFrame !== null && i >= this.idOfNextDecodedKeyFrame && i < this.idOfNextDecodedKeyFrame + this.decoder.decodeQueueSize) {
+////        console.log("But, it is already in the queue to be processed");
+////      }
+////      // We test if the previous decoded frame is the frame right before the current one (optimization
+////      // to avoid reconfiguration etc)
+////      else if (this.idOfNextDecodedKeyFrame + this.decoder.decodeQueueSize == i) {
+////        // It seems that if we do not put enough stuff to decode it might not start to decode
+////        // Any anyway it's a good idea to decode a bit in advance
+////        for(var j=i; j < this.allNonDecodedFrames.length && j-i <= this.nbFramesDecodeInAdvance; j++){
+////          this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
+////        }
+////        this._flushAndGarbageCollect(i, i + maxNbOfFramesToDecodeInAdvance + 1);
+////      } else {
+////        // We first check if some items are still in the queue (might occur if getFrame is called twice before
+////        // the first finishes). If so we reset everything:
+////        if (this.decoder.decodeQueueSize != 0) {
+////          console.log("We do a full reset!!!!!!!!!!");
+////          // We restart from a completely unrelated keyframe: we need to reset the decoder
+////          this.decoder.reset();
+////          // Resetting also gets rid of the configuration, so we need to reconfigure it (not sure if we lose
+////          // efficiency here, but this is done only when we do a jump of frames)
+////          this.decoder.configure(this.decoderConfig);
+////        }
+////        this.idOfNextDecodedKeyFrame = this.allNonDecodedFrames[i].idParentKeyFrame;
+////        /* console.log("In getFrame() this.idOfNextDecodedKeyFrame", this.idOfNextDecodedKeyFrame);
+////         * console.log("We will loop from", this.idOfNextDecodedKeyFrame, "to", i); */
+////        // We need to decode all frames from the last key frame:
+////        for (var j=this.idOfNextDecodedKeyFrame; j < this.allNonDecodedFrames[i].idNextKeyFrame; j++) {
+////          // console.log("We will decode 1:", this.allNonDecodedFrames[j].nonDecodedFrame);
+////          var x = this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
+////          console.log("The decoder outputted ", x);
+////        }
+////        // We queued all frames to decode, we wait for the decoding to finish:
+////        // await this.decoder.flush();
+////        // Arg, we don't want to flush, otherwise we need to send a key frame the next time.
+////        // https://github.com/w3c/webcodecs/issues/220
+////        // and for efficiency reasons, I don't want to decode 250 frames just to print the current frame.
+////        // Let's implement our own flush (actually it has some advantages, for instance we can ask to decode in
+////        // advance a few frames, just make sure to add some stuff to be sure we are not garbage collected)
+////        // Arggg 2: the decoder will not event start if we do not actually flush (or rather it will start after
+////        // a few frames). So let's combine both methods: we flush, but in a non-blocking way to stop before:
+////        this._flushAndGarbageCollect(this.idOfNextDecodedKeyFrame, this.allNonDecodedFrames[i].idNextKeyFrame); // Do NOT use await here.
+////      }
+////      await waitEventUntil(self, "newCachedFrame", () => this.cachedFrames.has(i), (l) => {
+////        this.getFrameListener = l
+////      });
+////      return this.cachedFrames.get(i).frame;
     }
-  }
-
-  async _flushAndGarbageCollect(fromFrame, toFrameExcluded) {
-    // await this.decoder.flush();
-    // We garbage collect useless frames
-    this._garbageCollectFrames(fromFrame, toFrameExcluded)
   }
   
   getNumberFrame() {
