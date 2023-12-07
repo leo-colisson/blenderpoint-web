@@ -440,6 +440,10 @@ class GetAnyFrame {
     return nextElementToDecode;
   }
 
+  getNumberOfFramesIfPossible() {
+    return this.allNonDecodedFrames.length;
+  }
+  
   async _forceAddInCacheAndGarbageCollect(idFrom, idToExcluded, idFromGC, idToGC) {
     await this._forceAddInCache(idFrom, idToExcluded);
     if (idToGC === undefined) {
@@ -463,13 +467,21 @@ class GetAnyFrame {
   
   // TODO: make it work also if the frame is not yet available (loading video), or if i = Infinity to get the
   // last frame. Get inspired by commented code in _drawFrameFromIndex
-  // TODO: throw error if i is too big. silentError is optional (boolean whether raise error or output false)
   // The backward is an indication that we should store more frames in the cache not to always recompute the sames
   // This returns -1 if the frame is out of range.
-  async getFrame(i, silentError, backward) {
+  async getFrame(i, backward, forceInRange) {
     // We check if the frame is in the good range
-    if (i < 0 || i >= this.allNonDecodedFrames.length) {
-      return null
+    if(!forceInRange) {
+      if (i < 0 || i >= this.allNonDecodedFrames.length) {
+        return null;
+      }
+    } else {
+      if (i < 0) {
+        i = 0;
+      }
+      if (i >= this.allNonDecodedFrames.length) {
+        i = this.allNonDecodedFrames.length - 1;
+      }
     }
     // If we were already trying to get an image, we stop the older one.
     if (this.getFrameListener) {
@@ -751,10 +763,19 @@ class BlenderpointVideoWorker {
 
   // like _drawFrame but takes as argument the index of the frame, and loops with requestAnimationFrame
   // until the frame is loaded if the file is not yet ready to use.
-  async _drawFrameFromIndex(i, silentError, backward) {
+  async _drawFrameFromIndex(i, backward, forceInRange) {
     console.log("_drawFrameFromIndex", i);
     this._ensureStoppedAnimationFrameFetching();
-    const frame = await this.anyFrame.getFrame(i, silentError, backward);
+    if(forceInRange) {
+      if (i < 0) {
+        i = 0;
+      }
+      if (i >= this.anyFrame.getNumberOfFramesIfPossible()) {
+        i = this.anyFrame.getNumberOfFramesIfPossible() - 1;
+      }
+    }
+
+    const frame = await this.anyFrame.getFrame(i, backward);
     if (frame) {
       this._drawFrame(frame);
       this.currentFrame = i;
@@ -769,7 +790,7 @@ class BlenderpointVideoWorker {
   async gotoFrame(i) {
     console.log("goto",i);
     this._ensureStoppedAnimationFrame();
-    await this._drawFrameFromIndex(i);
+    await this._drawFrameFromIndex(i, undefined, true);
     // triggers a refresh
     await this.waitRedraw();
     this._ensureStoppedAnimationFrame();
@@ -787,6 +808,10 @@ class BlenderpointVideoWorker {
   getCurrentPage() {
     const pages = [...new Set([...this.stops, 0, Infinity])];
     return pages.filter(e => e <= this.currentFrame).reduce((iMax, x, i, arr) => x > arr[iMax] ? i : iMax, 0);
+  }
+
+  getCurrentFrame() {
+    return this.currentFrame;
   }
   
   getNumberOfFramesIfPossible() {
@@ -850,7 +875,7 @@ class BlenderpointVideoWorker {
       return;
     }
     const nextFrame = this.currentFrame + 1;
-    const notTheLastOne = await this._drawFrameFromIndex(nextFrame, true);
+    const notTheLastOne = await this._drawFrameFromIndex(nextFrame);
     if(notTheLastOne) {
       await this.waitRedraw();
       this._playAtMaxSpeed();
@@ -924,7 +949,7 @@ class BlenderpointVideoWorker {
         frameJump = true;
         console.log("jump: so instead we will draw ", frameToDisplay);
       }
-      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
+      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay);
       if (frameJump) {
         this.initTime = performance.now();
         this.initialFrame = frameToDisplay;
@@ -970,6 +995,7 @@ class BlenderpointVideoWorker {
     this.isPlayingUntilPrevious = nextStop;
     const playAux = async () => {
       const deltaTime = (performance.now() - this.initTime)/1000;
+      console.log(deltaTime, this.fps, this.playbackSpeed, this.initialFrame, nextStop);
       var frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + this.initialFrame, nextStop);
       // To check if a frame jump were supposed to happend.
       var frameJump = false;
@@ -983,7 +1009,7 @@ class BlenderpointVideoWorker {
         console.log("jump: so instead we will draw ", frameToDisplay);
       }
 
-      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true, true);
+      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
       if (frameJump) {
         this.initTime = performance.now();
         this.initialFrame = frameToDisplay;
@@ -1108,7 +1134,12 @@ class BlenderpointVideoWorker {
     this.frameLog(message);
   }
 
-  async action(actionType, actionData) {
+  logGlobal() {
+    var message = "\nAll stops: " + this.stops;
+    this.frameLog(message);
+  }
+
+  async action(actionType, actionData, actionID) {
     switch (actionType) {
       case 'loadVideoFileFromObjectURL':
         this.loadVideoFileFromObjectURL(actionData.videoObjectURL, actionData.config);
@@ -1144,8 +1175,10 @@ class BlenderpointVideoWorker {
         this.gotoPage(actionData);
         break;
       case 'logFrame':
-        if (actionData === undefined)
-          this.logFrame(actionData || this.currentFrame);
+          this.logFrame(actionData === undefined ? this.currentFrame : actionData);
+        break;
+      case 'logGlobal':
+        this.logGlobal();
         break;
       case 'addStop':
         this.stops = [...new Set([...this.stops, this.currentFrame])].sort(function(a, b) {
@@ -1161,19 +1194,24 @@ class BlenderpointVideoWorker {
         this.setStops(actionData);
         break;
       case 'getStops':
-        this.postMessage({result: this.getStops()});
+        self.postMessage({actionID: actionID, result: this.getStops()});
         break;
       case 'getCurrentPage':
-        this.postMessage({result: this.getCurrentPage()});
+        self.postMessage({actionID: actionID, result: this.getCurrentPage()});
+        break;
+      case 'getCurrentFrame':
+        self.postMessage({actionID: actionID, result: this.getCurrentFrame()});
         break;
       case 'getNumberOfPages':
-        this.postMessage({result: this.getNumberOfPages()});
+        console.log("actionID", actionID);
+        const nbPages = this.getNumberOfPages();
+        self.postMessage({actionID: actionID, result: nbPages});
         break;
       case 'getNumberOfFramesIfPossible':
-        this.postMessage({result: this.getNumberOfFramesIfPossible()});
+        self.postMessage({actionID: actionID, result: this.getNumberOfFramesIfPossible()});
         break;
       case 'getInfoOnFrame':
-        this.postMessage({result: this.getInfoOnFrame(actionData)});
+        self.postMessage({actionID: actionID, result: this.getInfoOnFrame(actionData)});
         break;
       case 'loadVideoFileFromFile':
         this.loadVideoFileFromFile(actionData.file, actionData.config);
@@ -1206,7 +1244,7 @@ self.onmessage = function(msg) {
   }
   if (msg.data.blenderpointActionType) {
     if (self.bpVideo) {
-      bpVideo.action(msg.data.blenderpointActionType, msg.data.blenderpointActionData);
+      bpVideo.action(msg.data.blenderpointActionType, msg.data.blenderpointActionData, msg.data.actionID);
     } else {
       self.postMessage({error: "You must first load a video before interacting with it."});
     }

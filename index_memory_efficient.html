@@ -31,6 +31,7 @@
       <li><code>f</code>: go to a specific frame</li>
       <li><code>g</code>: go to a specific page</li>
       <li><code>l</code>: print information on the current frame in the console (<code>F12 > console</code>)</li>
+      <li><code>L</code>: print generic information, notably on the list of stops, in the console (<code>F12 > console</code>)</li>
       <li><code>a</code>: add current frame to stops, and print the list of stops in the console (<code>F12 > console</code>)</li>
       <li><code>r</code>: remove current frame from stops</li>
       <li><code>S</code>: manually specify the list of stops</li>
@@ -66,6 +67,9 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       <li>Make nicer GUI</li>
       <li>Document the JSON format</li>
       <li>For now the video cannot play sound. Try to get inspiration from the video/audio example of w3m to add support for sound.</li>
+      <li>Test on different OS to ensure it works (no reasons to see why it would fail, but still)</li>
+      <li>Make it work for non Chrome-based browser (webcodec needed to decode for now, apparently Firefox will implement it soonish, but in the meantime we can maybe use a firefox-specific decoder). Note that ffmpeg would be too slow for decoding in real time.</li>
+      <li>Print more informations with <code>L</code>, like the stops separated per video chunks.</li>
     </ul>
     
     
@@ -134,17 +138,22 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
 
         async __runActionWithAnswer(actionType, actionData){
           const actionID = crypto.randomUUID();
+          console.log("Sending message");
           this.worker.postMessage({
-            blenderpointActionID: actionID,
+            actionID: actionID,
             blenderpointActionType: actionType,
             blenderpointActionData: actionData
           });
+          console.log("Sending message");
           return new Promise((resolve) => {
+            console.log("Waiting for answer");
             const getAnswer = (msg) => {
+              console.log("Just got an answer", msg.data, msg.data.result, msg.data.actionID, actionID);
               if (msg.data.actionID == actionID) {
                 // We remove the event listener
                 this.worker.removeEventListener("message", getAnswer);
                 // We continue
+                console.log("I will return ", msg.data.result);
                 resolve(msg.data.result);
               }
             };
@@ -205,27 +214,33 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
         async getCurrentPage() {
           return await this.__runActionWithAnswer("getCurrentPage");
         }
-        
+
+        async getCurrentFrame() {
+          return await this.__runActionWithAnswer("getCurrentFrame");
+        }
+
         async getNumberOfFramesIfPossible() {
           return await this.__runActionWithAnswer("getNumberOfFramesIfPossible");
         }
 
-        getNumberOfPages() {
-          this.__runActionWithAnswer("getNumberOfPages");
+        async getNumberOfPages() {
+          return await this.__runActionWithAnswer("getNumberOfPages");
         }
 
-        async gotoPageGUI(i) {
+        async gotoPageGUI() {
           const nbPages = await this.getNumberOfPages();
-          const answer = prompt("To which page do you want to go? (currently " + this.getCurrentPage() + "/" + nbPages + ")");
+          console.log("The nbPages is", nbPages);
+          const currentPage = await this.getCurrentPage();
+          const answer = prompt("To which page do you want to go? (currently " + (currentPage + 1) + "/" + nbPages + ")");
           if (answer) {
-            this.gotoPage(parseInt(answer));
+            this.gotoPage(parseInt(answer-1));
           }
-        }
-        
+        }        
 
-        async gotoFrameGUI(i) {
+        async gotoFrameGUI() {
           const nbFrames = await this.getNumberOfFramesIfPossible();
-          const answer = prompt("To which frame do you want to go? (currently " + this.currentFrame + "/" + nbFrames + ")");
+          const currentFrame = await this.getCurrentFrame();
+          const answer = prompt("To which frame do you want to go? (currently " + currentFrame + "/" + nbFrames + ")");
           if (answer) {
             this.gotoFrame(parseInt(answer));
           }
@@ -296,7 +311,11 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
         }
 
         logFrame(frame) {
-          this.__runAction("logFrame");
+          this.__runAction("logFrame", frame);
+        }
+
+        logGlobal() {
+          this.__runAction("logGlobal");
         }
 
         attributeKeyboardAndMouseShortcuts(config) {
@@ -366,6 +385,9 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
                 this.logFrame(this.currentFrame);
                 break;
                 // a for "add current frame to stops"
+              case "L":
+                this.logGlobal(this.currentFrame);
+                break;
               case "a":
                 this.__runAction("addStop");
                 break;
