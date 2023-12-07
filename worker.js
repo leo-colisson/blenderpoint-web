@@ -339,7 +339,6 @@ class GetAnyFrame {
         this.cachedFrames.get(orderedElements[i][0]).frame.close();
         this.cachedFrames.delete(orderedElements[i][0]);
         orderedElements[i][1].frame.close();
-        console.log("garbage just closed frame", orderedElements[i][0]);
       }
     }
     console.log("garbage ending items", this.cachedFrames.size);
@@ -517,56 +516,6 @@ class GetAnyFrame {
       }
       console.log("We received the frame");
       return this.cachedFrames.get(i).frame;
-      
-////      // Note that we can only (efficiently) decode all elements between two key frames in one go.
-////      // First, we check if the frame is currently in the queue of frames to decode:
-////      if (this.idOfNextDecodedKeyFrame !== null && i >= this.idOfNextDecodedKeyFrame && i < this.idOfNextDecodedKeyFrame + this.decoder.decodeQueueSize) {
-////        console.log("But, it is already in the queue to be processed");
-////      }
-////      // We test if the previous decoded frame is the frame right before the current one (optimization
-////      // to avoid reconfiguration etc)
-////      else if (this.idOfNextDecodedKeyFrame + this.decoder.decodeQueueSize == i) {
-////        // It seems that if we do not put enough stuff to decode it might not start to decode
-////        // Any anyway it's a good idea to decode a bit in advance
-////        for(var j=i; j < this.allNonDecodedFrames.length && j-i <= this.nbFramesDecodeInAdvance; j++){
-////          this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
-////        }
-////        this._flushAndGarbageCollect(i, i + maxNbOfFramesToDecodeInAdvance + 1);
-////      } else {
-////        // We first check if some items are still in the queue (might occur if getFrame is called twice before
-////        // the first finishes). If so we reset everything:
-////        if (this.decoder.decodeQueueSize != 0) {
-////          console.log("We do a full reset!!!!!!!!!!");
-////          // We restart from a completely unrelated keyframe: we need to reset the decoder
-////          this.decoder.reset();
-////          // Resetting also gets rid of the configuration, so we need to reconfigure it (not sure if we lose
-////          // efficiency here, but this is done only when we do a jump of frames)
-////          this.decoder.configure(this.decoderConfig);
-////        }
-////        this.idOfNextDecodedKeyFrame = this.allNonDecodedFrames[i].idParentKeyFrame;
-////        /* console.log("In getFrame() this.idOfNextDecodedKeyFrame", this.idOfNextDecodedKeyFrame);
-////         * console.log("We will loop from", this.idOfNextDecodedKeyFrame, "to", i); */
-////        // We need to decode all frames from the last key frame:
-////        for (var j=this.idOfNextDecodedKeyFrame; j < this.allNonDecodedFrames[i].idNextKeyFrame; j++) {
-////          // console.log("We will decode 1:", this.allNonDecodedFrames[j].nonDecodedFrame);
-////          var x = this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
-////          console.log("The decoder outputted ", x);
-////        }
-////        // We queued all frames to decode, we wait for the decoding to finish:
-////        // await this.decoder.flush();
-////        // Arg, we don't want to flush, otherwise we need to send a key frame the next time.
-////        // https://github.com/w3c/webcodecs/issues/220
-////        // and for efficiency reasons, I don't want to decode 250 frames just to print the current frame.
-////        // Let's implement our own flush (actually it has some advantages, for instance we can ask to decode in
-////        // advance a few frames, just make sure to add some stuff to be sure we are not garbage collected)
-////        // Arggg 2: the decoder will not event start if we do not actually flush (or rather it will start after
-////        // a few frames). So let's combine both methods: we flush, but in a non-blocking way to stop before:
-////        this._flushAndGarbageCollect(this.idOfNextDecodedKeyFrame, this.allNonDecodedFrames[i].idNextKeyFrame); // Do NOT use await here.
-////      }
-////      await waitEventUntil(self, "newCachedFrame", () => this.cachedFrames.has(i), (l) => {
-////        this.getFrameListener = l
-////      });
-////      return this.cachedFrames.get(i).frame;
     }
   }
   
@@ -576,7 +525,7 @@ class GetAnyFrame {
   }
 
   clearCache() {
-    this.cachedFrames.forEach((value, key) => key.frame.close());
+    this.cachedFrames.forEach((value, key) => value.frame.close());
     this.cachedFrames = new Map();
     this.nextPriorityRemove = 0;
   }
@@ -607,6 +556,7 @@ class BlenderpointVideoWorker {
     // playbackSpeed is the speed of playing: 0 means that it does not play, 1 it plays at normal speed forward,
     // -1 it plays at normal speed backward, 1.5 it plays at speed x1.5…
     this.playbackSpeed = 1;
+    // Contains the ID to the frame to stop at.
     this.isPlayingUntil = undefined;
     this.isPlayingUntilPrevious = undefined;
     this.animationFrameID = null;
@@ -631,6 +581,10 @@ class BlenderpointVideoWorker {
         this.redrawWhenResolutionChanges();
       }
     });
+
+    // To know the starting frame/date where we started to play (or avoid a frame jump):
+    this.initTime = null;
+    this.initialFrame = null;
   }
 
   updateAlertFunction (new_alert) {
@@ -797,10 +751,10 @@ class BlenderpointVideoWorker {
 
   // like _drawFrame but takes as argument the index of the frame, and loops with requestAnimationFrame
   // until the frame is loaded if the file is not yet ready to use.
-  async _drawFrameFromIndex(i, silentError) {
+  async _drawFrameFromIndex(i, silentError, backward) {
     console.log("_drawFrameFromIndex", i);
     this._ensureStoppedAnimationFrameFetching();
-    const frame = await this.anyFrame.getFrame(i, silentError);
+    const frame = await this.anyFrame.getFrame(i, silentError, backward);
     if (frame) {
       this._drawFrame(frame);
       this.currentFrame = i;
@@ -812,7 +766,7 @@ class BlenderpointVideoWorker {
     }
   }
 
-  async gotoFrame(i) {
+  async gotoFrame(i, ) {
     console.log("goto",i);
     this._ensureStoppedAnimationFrame();
     await this._drawFrameFromIndex(i);
@@ -949,16 +903,32 @@ class BlenderpointVideoWorker {
     }
     console.log("We were apparently not playing");
     // We first compute the next stop
-    const initialFrame = this.currentFrame;
+    this.initialFrame = this.currentFrame;
     const nextStop = stop || this.getNextStop();
     console.log(nextStop, stop);
-    const initTime = Date.now();
+    // https://stackoverflow.com/questions/30795525/performance-now-vs-date-now
+    this.initTime = performance.now();
     this.isPlayingUntil = nextStop;
     const playAux = async () => {
-      const deltaTime = (Date.now() - initTime)/1000;
-      const frameToDisplay = Math.min(Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
+      const deltaTime = (performance.now() - this.initTime)/1000;
+      var frameToDisplay = Math.min(Math.round(deltaTime * this.fps * this.playbackSpeed) + this.initialFrame, nextStop);
       console.log("frameToDisplay", frameToDisplay);
+      // To check if a frame jump were supposed to happend.
+      var frameJump = false;
+      // If we were supposed to jump a frame...
+      if (frameToDisplay > this.currentFrame+1) {
+        // ... well we don't jump and reinitialize the time. Otherwise, if we jump it could create huge
+        // ugly jumps, even if the decoder is only slightly too slow.
+        console.log("jump: We were supposed to have a frame jump, from ", this.currentFrame, " to ", frameToDisplay);
+        frameToDisplay = this.currentFrame+1;
+        frameJump = true;
+        console.log("jump: so instead we will draw ", frameToDisplay);
+      }
       const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
+      if (frameJump) {
+        this.initTime = performance.now();
+        this.initialFrame = frameToDisplay;
+      }
       if(notTheLastOne && frameToDisplay < nextStop) {
         await this.waitRedraw();
         await playAux();
@@ -995,11 +965,11 @@ class BlenderpointVideoWorker {
     const initialFrame = this.currentFrame;
     const nextStop = stop || this.getPreviousStop();
     console.log("Will play until ", nextStop);
-    const initTime = Date.now();
+    const initTime = performance.now();
     console.log(nextStop);
     this.isPlayingUntilPrevious = nextStop;
     const playAux = async () => {
-      const deltaTime = (Date.now() - initTime)/1000;
+      const deltaTime = (performance.now() - initTime)/1000;
       const frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
       const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
       if(notTheLastOne && frameToDisplay > nextStop) {
@@ -1025,11 +995,11 @@ class BlenderpointVideoWorker {
     // First stop the play
     this._ensureStoppedAnimationFrame();
     const previousStop = stop || this.getPreviousStop();
-    return await this.gotoFrame(previousStop);
+    return await this.gotoFrame(previousStop, true, true);
   }
 
   async gotoPreviousFrame() {
-    await this.gotoFrame(this.currentFrame - 1)
+    await this.gotoFrame(this.currentFrame - 1, true, true);
   }
 
   async gotoNextFrame() {
