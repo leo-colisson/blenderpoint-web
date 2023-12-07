@@ -372,13 +372,14 @@ class GetAnyFrame {
     // If we are after the frame that will be decoded next, and if we share the same parent key, we can
     // just continue to decode normally, otherwise we first need to reset:
     console.log(idFrom, this.allNonDecodedFrames[idFrom].idParentKeyFrame, this.idOfNextDecodedKeyFrame);
-    if (idFrom >= this.idOfNextDecodedKeyFrame && this.idOfNextDecodedKeyFrame !== null && this.allNonDecodedFrames[idFrom].idParentKeyFrame == this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame) {
+    if (idFrom >= this.idOfNextDecodedKeyFrame
+        && this.idOfNextDecodedKeyFrame !== null
+        && this.allNonDecodedFrames[idFrom].idParentKeyFrame
+      == this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame
+    ) {
       console.log("I can just continue my usual work, starting to decode frame ", this.nextFrameToAskForDecode);
     } else {
-      console.log("_forceAddInCache: We need to reset", idFrom, this.idOfNextDecodedKeyFrame, this.idOfNextDecodedKeyFrame)
-      console.log("_forceAddInCache", this.allNonDecodedFrames[idFrom].idParentKeyFrame);
-      // TODO: here idOfNextDecodedKeyFrame gets too big, and is not reset when we replay
-      console.log("_forceAddInCache", this.idOfNextDecodedKeyFrame === null ? "nope" : this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame);
+      console.log("We will reset the decoder.");
       // We restart from a completely unrelated keyframe: we need to reset the decoder. If not we reset:
       this.decoder.reset();
       // Resetting also gets rid of the configuration, so we need to reconfigure it (not sure if we lose
@@ -411,8 +412,6 @@ class GetAnyFrame {
         console.log("The decoder is overwhelmed, let's wait before sending new stuff in the queue of size: ", this.decoder.decodeQueueSize);
       } else {
         console.log("Starting to decoding frame ", this.nextFrameToAskForDecode, this.decoder.decodeQueueSize, this.maxDecodeQueueSize);
-        this.decoder.decode(this.allNonDecodedFrames[this.nextFrameToAskForDecode].nonDecodedFrame);
-        this.nextFrameToAskForDecode++;
         if(this.nextFrameToAskForDecode >= this.allNonDecodedFrames.length) {
           // We arrived at the end of the video: let us flush (unless someone else is already running this function)
           const mustAbort = await (() => {
@@ -428,6 +427,9 @@ class GetAnyFrame {
           } else {
             return nextElementToDecode;
           }
+        } else {
+          this.decoder.decode(this.allNonDecodedFrames[this.nextFrameToAskForDecode].nonDecodedFrame);
+          this.nextFrameToAskForDecode++;
         }
       }
       // since the decoding is asynchronously done, we need to stop temporarily the code to give
@@ -464,7 +466,12 @@ class GetAnyFrame {
   // last frame. Get inspired by commented code in _drawFrameFromIndex
   // TODO: throw error if i is too big. silentError is optional (boolean whether raise error or output false)
   // The backward is an indication that we should store more frames in the cache not to always recompute the sames
+  // This returns -1 if the frame is out of range.
   async getFrame(i, silentError, backward) {
+    // We check if the frame is in the good range
+    if (i < 0 || i >= this.allNonDecodedFrames.length) {
+      return null
+    }
     // If we were already trying to get an image, we stop the older one.
     if (this.getFrameListener) {
       self.removeEventListener("newCachedFrame", this.getFrameListener);
@@ -481,7 +488,7 @@ class GetAnyFrame {
       // in due time. No need to do this optimization if we run backward (or at least not this way).
       if(!backward) {
         const firstNonCachedFrame = this._findFirstNonCachedFrame(i, this.nbFramesDecodeInAdvance);
-        console.log("firstNonCachedFrame=",firstNonCachedFrame, "at distance smaller than ", this.nbFramesDecodeInAdvance, this.cachedFrames.has(i+this.nbFramesDecodeInAdvance), this.cachedFrames);
+        // console.log("firstNonCachedFrame=",firstNonCachedFrame, "at distance smaller than ", this.nbFramesDecodeInAdvance, this.cachedFrames.has(i+this.nbFramesDecodeInAdvance), this.cachedFrames);
         if (firstNonCachedFrame != -1) {
           // We do not use await on purpose, otherwise it might slow down the process when it fetches new stuff
           this._forceAddInCacheAndGarbageCollect(firstNonCachedFrame, i + this.nbFramesDecodeInAdvance + 1,i);
@@ -603,6 +610,8 @@ class BlenderpointVideoWorker {
     this.isPlayingUntil = undefined;
     this.isPlayingUntilPrevious = undefined;
     this.animationFrameID = null;
+    // This is used only to know if we are running playAtMaxSpeed that works differently
+    this.isPlayingMaxSpeed = false;
     // we might also call request animation frame if the user wants to display something on screen
     // while the video is not yet loaded, use this for that use case.
     this.animationFrameIDFetching = null;
@@ -630,7 +639,7 @@ class BlenderpointVideoWorker {
     
   isPlaying() {
     console.log(this.animationFrameID);
-    return this.animationFrameID != null;
+    return this.animationFrameID != null || this.isPlayingMaxSpeed;
   }
 
   setFps(fps) {
@@ -873,18 +882,33 @@ class BlenderpointVideoWorker {
 
   // play at the max FPS allowed by the screen refresh rate.
   async playAtMaxSpeed() {
+    // Needed to allow stopping via the toggle play button
+    this.isPlayingMaxSpeed = true;
+    await this._playAtMaxSpeed();
+  }
+
+  // play at the max FPS allowed by the screen refresh rate.
+  async _playAtMaxSpeed() {
+    console.log("Playing max speed", this.isPlayingMaxSpeed);
+    if (!this.isPlayingMaxSpeed) {
+      console.log("Finished to draw, stopped by user.");
+      this._ensureStoppedAnimationFrame();
+      return;
+    }
     const nextFrame = this.currentFrame + 1;
     const notTheLastOne = await this._drawFrameFromIndex(nextFrame, true);
     if(notTheLastOne) {
       await this.waitRedraw();
-      this.playAtMaxSpeed();
+      this._playAtMaxSpeed();
     }
     else {
+      this.isPlayingMaxSpeed = false;
       console.log("Finished to draw");
       this._ensureStoppedAnimationFrame();
     }
   }
 
+  
   // frame is optional, return the next stop. It might return Infinity if there is none
   getNextStop(frame) {
     const initialFrame = frame || this.currentFrame;
@@ -1019,6 +1043,9 @@ class BlenderpointVideoWorker {
 
   async togglePlayPause() {
     if (this.isPlaying()) {
+      if(this.isPlayingMaxSpeed) {
+        this.isPlayingMaxSpeed = false;
+      }
       this._ensureStoppedAnimationFrame();
     } else {
       this.playUntilNextStop(Infinity)
