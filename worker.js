@@ -766,7 +766,7 @@ class BlenderpointVideoWorker {
     }
   }
 
-  async gotoFrame(i, ) {
+  async gotoFrame(i) {
     console.log("goto",i);
     this._ensureStoppedAnimationFrame();
     await this._drawFrameFromIndex(i);
@@ -962,16 +962,32 @@ class BlenderpointVideoWorker {
     // First stop the play
     this._ensureStoppedAnimationFrame()
     // We first compute the next stop
-    const initialFrame = this.currentFrame;
+    this.initialFrame = this.currentFrame;
     const nextStop = stop || this.getPreviousStop();
     console.log("Will play until ", nextStop);
-    const initTime = performance.now();
+    this.initTime = performance.now();
     console.log(nextStop);
     this.isPlayingUntilPrevious = nextStop;
     const playAux = async () => {
-      const deltaTime = (performance.now() - initTime)/1000;
-      const frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
-      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
+      const deltaTime = (performance.now() - this.initTime)/1000;
+      var frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + this.initialFrame, nextStop);
+      // To check if a frame jump were supposed to happend.
+      var frameJump = false;
+      // If we were supposed to jump a frame...
+      if (frameToDisplay < this.currentFrame-1) {
+        // ... well we don't jump and reinitialize the time. Otherwise, if we jump it could create huge
+        // ugly jumps, even if the decoder is only slightly too slow.
+        console.log("jump: We were supposed to have a frame jump, from ", this.currentFrame, " to ", frameToDisplay);
+        frameToDisplay = this.currentFrame-1;
+        frameJump = true;
+        console.log("jump: so instead we will draw ", frameToDisplay);
+      }
+
+      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true, true);
+      if (frameJump) {
+        this.initTime = performance.now();
+        this.initialFrame = frameToDisplay;
+      }
       if(notTheLastOne && frameToDisplay > nextStop) {
         await this.waitRedraw();
         await playAux();
