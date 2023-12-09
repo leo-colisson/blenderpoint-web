@@ -210,8 +210,8 @@ class GetAnyFrame {
       onConfig: (config) => {
         this._onConfig(userConfig,config);
       },
-      onFinish: () => {
-        this._onFinishDemuxer(userConfig);
+      onFinish: async () => {
+        await this._onFinishDemuxer(userConfig);
       },
       // a chunk is a non decoded frame
       onChunk: (chunk) => {
@@ -283,7 +283,7 @@ class GetAnyFrame {
     this.decoder.configure(this.decoderConfig);
   }
   
-  _onFinishDemuxer(userConfig) {
+  async _onFinishDemuxer(userConfig) {
     // We compute idNextKeyFrame now, by going through the array starting from the end.
     // Another option might be to do it at the end of demuxing a group of frames, but I am not 100% sure
     // if we always end on a keyFrame, so let's do it here for safety.
@@ -297,8 +297,12 @@ class GetAnyFrame {
     }
     // We just finished to demux the whole file, so this.allNonDecodedFrames is properly set.
     console.log("We just finished to demux the whole file.", this.allNonDecodedFrames);
-    if(userConfig._onFinishDemuxer) userConfig._onFinishDemuxer();
-    if(userConfig.onFinishDemuxer) userConfig.onFinishDemuxer();
+    if(userConfig._onFinishDemuxer) {
+      await userConfig._onFinishDemuxer();
+    }
+    if(userConfig.onFinishDemuxer) {
+      await userConfig.onFinishDemuxer();
+    }
   }
   
   _onDecodedFrame(frame) {
@@ -660,6 +664,7 @@ class BlenderpointVideoWorker {
     if (this.anyFrame) {
       this.anyFrame.close();
     }
+    this.userConfig = userConfig;
     this.anyFrame = new GetAnyFrame(videoObjectURL, userConfig);
   }
 
@@ -669,12 +674,13 @@ class BlenderpointVideoWorker {
     if (jsonComments) {
       try {
         this.jsonComments = JSON.parse(jsonComments);
-        console.log("The video contains the following json: ", this.jsonComments)
-        if (config.stops) {
-          if (typeof config.stops === 'string' || config.stops instanceof String) {
-            this.setStopsFromString(config.stops);
+        console.log("The video contains the following json: ", this.jsonComments);
+        console.log("userjson", this.userConfig);
+        if (this.userConfig.stops) {
+          if (typeof this.userConfig.stops === 'string' || this.userConfig.stops instanceof String) {
+            this.setStopsFromString(this.userConfig.stops);
           } else {
-            this.setStops(config.stops);
+            this.setStops(this.userConfig.stops);
           }
           console.log("We got from the configuration the following list of stops:", this.stops);
         } else {
@@ -715,8 +721,12 @@ class BlenderpointVideoWorker {
     return content;
   }
 
-  _onFinishDemuxer() {
+  async _onFinishDemuxer() {
     this.isReady = true;
+    // We draw the first frame
+    console.log("Foo");
+    await wait(0); // This is needed or the decoder will not get the time to run
+    await this.gotoFrame(0);
   }
   
   _ensureStoppedAnimationFrameFetching() {
@@ -1142,6 +1152,7 @@ class BlenderpointVideoWorker {
   async action(actionType, actionData, actionID) {
     switch (actionType) {
       case 'loadVideoFileFromObjectURL':
+        console.log("userconfig action", actionData.config);
         this.loadVideoFileFromObjectURL(actionData.videoObjectURL, actionData.config);
         break;
       case 'playUntilNextStop':
