@@ -65,6 +65,10 @@ https://leo-colisson.github.io/blenderpoint-web/forceStops=10,20,50</pre>
       </code>
     </p>
 
+    <h2>Acknowledgment</h2>
+
+    I'd like to thank <a href="https://github.com/w3c/webcodecs/issues/753">sandersdan</a> that provided very useful advices to make this more efficient. 
+    
     <h2>TODO and known bugs</h2>
     <ul>
       <li>Some frames are not closed before garbage collection, no idea why. In practice it seems to be no problem, but check memory consumption.</li>
@@ -79,6 +83,8 @@ https://leo-colisson.github.io/blenderpoint-web/forceStops=10,20,50</pre>
       <li>Automatically cache all stops to quickly navigate</li>
       <li>Prints a table of all pages and/or content to quickly jump anywhere in the document</li>
       <li>Create two modes, one where backward is not continuous, and one where it is continuous (not super efficient since for now there are some small pauses due to how videos are encoded, harder to quickly go backward to find a specific frame, and this can be confusing since we never know the direction, but in some specific cases people might still want it).</li>
+      <li>Prints a nice message while loading the video</li>
+      <li>Provides a way to start the show before fetching the whole video (would require the MOOC box of the video to be placed before the main content to get the JSON file)</li>
       <li>Allow more advanced content like js animations etc to write interactive content (but still fallback to video if not displayed in a browser)</li>
     </ul>
     
