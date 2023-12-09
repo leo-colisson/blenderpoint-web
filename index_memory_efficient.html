@@ -17,7 +17,7 @@
     <button type="button" onclick="bpVideo.playUntilNextStop()">Next Stop (continuous)</button>
     <button type="button" onclick="bpVideo.gotoFrame(0)">Restart</button>
     <button type="button" onclick="bpVideo.playAtMaxSpeed()">Play at max speed</button>
-    <p>To load the demo, click <a href="index.html?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4">here</a>.</p>
+    <p>To load the demo, click <a href="index_memory_efficient.html?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4">here</a>.</p>
 
     <h2>Shortcuts</h2>
     <ul>
@@ -39,7 +39,7 @@
 
     <h2>Documentation</h2>
 
-    <p>This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops (that you can obtain by using the <code>a</code> and <code>r</code> keys, cf documentation above), you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):</p>
+    <p>This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not considered as stable due to the lack of tests, polishments, and the fact that it is not tested in Firefox. See TODO for more details.). To specify the stops (that you can obtain in console (<code>F12 > console</code>) by using the <code>L</code> key, cf documentation above), you can either press the <code>S</code>/<code>a</code>/<code>r</code> keys (cf. documentation above), or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):</p>
     
     <code>
       <pre>
@@ -57,7 +57,12 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       <code>
         <pre>
 https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4&stops=10,20,50</pre>
-      </code>      
+      </code>
+      You can also override the stops of a any file that you load locally (even if stops are contained in the video file), but for that you need to use:
+      <code>
+        <pre>
+https://leo-colisson.github.io/blenderpoint-web/forceStops=10,20,50</pre>
+      </code>
     </p>
 
     <h2>TODO and known bugs</h2>
@@ -68,8 +73,13 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       <li>Document the JSON format</li>
       <li>For now the video cannot play sound. Try to get inspiration from the video/audio example of w3m to add support for sound.</li>
       <li>Test on different OS to ensure it works (no reasons to see why it would fail, but still)</li>
-      <li>Make it work for non Chrome-based browser (webcodec needed to decode for now, apparently Firefox will implement it soonish, but in the meantime we can maybe use a firefox-specific decoder). Note that ffmpeg would be too slow for decoding in real time.</li>
+      <li>Make it work for non Chrome-based browser (webcodec needed to decode for now, apparently Firefox will implement it soonish, but in the meantime we can maybe use a firefox-specific decoder). Note that ffmpeg would certainly be too slow for decoding in real time.</li>
       <li>Print more informations with <code>L</code>, like the stops separated per video chunks.</li>
+      <li>For now we hardcode the options to configure the number of frames to cache etc (tradeoff between speed and memory). It might be nicer to allow the user to choose them, or, additionally, to automatically detect the available cache size depending on the remaining space.</li>
+      <li>Automatically cache all stops to quickly navigate</li>
+      <li>Prints a table of all pages and/or content to quickly jump anywhere in the document</li>
+      <li>Create two modes, one where backward is not continuous, and one where it is continuous (not super efficient since for now there are some small pauses due to how videos are encoded, harder to quickly go backward to find a specific frame, and this can be confusing since we never know the direction, but in some specific cases people might still want it).</li>
+      <li>Allow more advanced content like js animations etc to write interactive content (but still fallback to video if not displayed in a browser)</li>
     </ul>
     
     
@@ -416,7 +426,20 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       window.start = async function(file) {
         console.log("Loading video");
         console.log(window.bpVideo);
-        window.bpVideo.loadVideoFileFromFile(file);
+        // we try to find a list of stops in the url. We use forceStops instead of stops, otherwise if we load
+        // a normal video first and then use stops it will use the older version.
+        const queryString = window.location.search;
+        const urlParams = new URLSearchParams(queryString);
+        const stops = urlParams.get('forceStops');
+        var config = {};
+        if(stops) {
+          alert("You configured in the URL stops that will override the value possibly encoded in the video. Keep that in mind if the video does not stop as expecting.");
+          config = {stops: stops};
+        }
+        // note that we do NOT look at the URL this time. This is on purpose, as otherwise loading a video
+        // from the url and then loading a file would pick the stops from the first video instead.
+        // Use S shortcut if you prefer this instead.
+        window.bpVideo.loadVideoFileFromFile(file, config);
 	/* window.bpVideo.setStops([0,25,50,100]); */
       }
       document.addEventListener('DOMContentLoaded', async () => {
