@@ -109,11 +109,11 @@ class MyMP4FileSink {
    }
  
    async #onSamples(track_id, ref, samples) {
-     console.log("Received multiple samples (aka frames): ");
-     // console.log(track_id, ref, samples);
+     console.debug("Received multiple samples (aka frames): ");
+     // console.debug(track_id, ref, samples);
      // Generate and emit an EncodedVideoChunk for each demuxed sample.
      for (const sample of samples) {
-       // console.log(sample.is_sync);
+       // console.debug(sample.is_sync);
        this.#onChunk(new EncodedVideoChunk({
          type: sample.is_sync ? "key" : "delta",
          timestamp: 1e6 * sample.cts / sample.timescale,
@@ -149,7 +149,7 @@ async function waitEventUntil(item, event, f, functionSaveListener) {
 }
 
 async function waitEventUntilWithAbort(item, event, f, functionSaveListener, abortIfNeeded) {
-  console.log("abortIfNeeded", abortIfNeeded);
+  console.debug("abortIfNeeded", abortIfNeeded);
   const e = await abortIfNeeded(getPromiseFromEvent(item, event, functionSaveListener), "01");
   if (f(e)) {
     return e
@@ -161,10 +161,10 @@ async function waitEventUntilWithAbort(item, event, f, functionSaveListener, abo
 // dequeue is not enough, as it seems to run before the call to output.
 // the event value is the id of the newly cached frame.
 const newCachedFrame = new Event("newCachedFrame");
-/* self.addEventListener("newCachedFrame", (e) => {console.log("Dummy");})
+/* self.addEventListener("newCachedFrame", (e) => {console.debug("Dummy");})
  * setTimeout(() => self.dispatchEvent(newCachedFrame, 42), 2000);
  * await waitEventUntil(self, "newCachedFrame", () => true);
- * console.log("Yeahhh Received!"); */
+ * console.debug("Yeahhh Received!"); */
 
 
 // Needed to abort everything when a new function is called by the user.
@@ -173,16 +173,16 @@ function makeMeAbortIfNeeded(promise, signal, debug) {
   return new Promise((resolve, reject) =>{
     // If the signal is already aborted, immediately throw in order to reject the promise.
     if (signal.aborted) {
-      console.log("Stopped before promise", promise);
+      console.debug("Stopped before promise", promise);
       reject(signal.reason);
     }
     const myListener = () => {
       // Why isn't this working?? It s
-      console.log("Just received a signal to abort");
+      console.debug("Just received a signal to abort");
       // Stop the main operation
       // Reject the promise with the abort reason.
       // WARNING: if the promise itself contains non blocking stuff, it will still continue to run.
-      console.log("Stopped during promise", promise, debug);
+      console.debug("Stopped during promise", promise, debug);
       reject(signal.reason);
       //reject(new Error(debug));
     };
@@ -199,7 +199,7 @@ function makeMeAbortIfNeeded(promise, signal, debug) {
 // next code will just run normally.
 function silentlyAbort(promise) {
   return promise.catch(error => {
-    console.log("I just got error", error);
+    console.debug("I just got error", error);
   });
 }
 
@@ -274,7 +274,7 @@ class GetAnyFrame {
       },
       // TODO: make this useful
       setStatus: (a, b) => {
-        console.log("status:", a, b);
+        console.debug("status:", a, b);
       },
     });
 
@@ -282,7 +282,7 @@ class GetAnyFrame {
     this.decoder = new VideoDecoder({
       output: this._onDecodedFrame.bind(this),
       error: (e) => {
-        console.log("I just got an error during decoding:", e);
+        console.debug("I just got an error during decoding:", e);
         /* console.error(e); */
         // This does not exist for now: more cleanly deal with error later.
         setStatus("decode", e);
@@ -314,7 +314,7 @@ class GetAnyFrame {
     this.videoWidth = config.codedWidth;
     this.videoHeight = config.codedHeight;
     const fps = config.info.videoTracks[0].nb_samples / (config.info.videoTracks[0].samples_duration / config.info.videoTracks[0].timescale);
-    console.log("fps", fps);
+    console.debug("fps", fps);
     if (fps < 120) {
       this.fps = fps;
       console.log("Setting fps to " + fps);
@@ -355,30 +355,30 @@ class GetAnyFrame {
   }
   
   _onDecodedFrame(frame) {
-    console.log("starting onDecodedFrame");
+    console.debug("starting onDecodedFrame");
     var idFrame = this.idOfNextDecodedKeyFrame;
     this.idOfNextDecodedKeyFrame++;
     // We add the frame to the cache
-    console.log("We are adding to the cache the frame", idFrame, "with priority", this.nextPriorityRemove);
+    console.debug("We are adding to the cache the frame", idFrame, "with priority", this.nextPriorityRemove);
     this.cachedFrames.set(idFrame, {
       frame: frame,
       lastAccessed: this.nextPriorityRemove
     });
     this.nextPriorityRemove++;
     currentWorker.dispatchEvent(newCachedFrame, {id: idFrame});
-    console.log("ending onDecodedFrame");
+    console.debug("ending onDecodedFrame");
   }
 
   // We can specify an element not to garbage collect (useful to keey the last value that was decoded)
   // Cleans the frame to ensure the memory contains only a small number of decoded frames.
   _garbageCollectFrames(fromIdFrameNotToGarbageCollect, toExcludedIdFrameNotToGarbageCollect) {
-    console.log("In _garbageCollectFrames");
+    console.debug("In _garbageCollectFrames");
     // If there were an error, for instance we stopped the function due to a race condition, no need to garbage
     // collect now.
     if(toExcludedIdFrameNotToGarbageCollect < 0) {
       return;
     };
-    console.log("garbage starting items", this.cachedFrames.size);
+    console.debug("garbage starting items", this.cachedFrames.size);
     // we add a -1 so that we do not count the current frame
     if(this.cachedFrames.size - 1 > this.maxNumberCachedFrames) {
       // We sort the element to remove them.
@@ -397,18 +397,18 @@ class GetAnyFrame {
         orderedElements[i][1].frame.close();
       }
     }
-    console.log("garbage ending items", this.cachedFrames.size);
+    console.debug("garbage ending items", this.cachedFrames.size);
   }
 
   // Make sure that all elements between idFrom and idToExcluded are in the cache. It returns the last element
   // that was send to decode (might be larger, like +10 due to latency of codec), useful for preserving it in the cache.
   async _forceAddInCache(idFrom, idToExcluded) {
-    console.log("In _forceAddInCache");
+    console.debug("In _forceAddInCache");
     // We want to make sure we do not call this function twice (race conditions on the decoder could be fairly bad).
     // So we increment a public counter when we start this function, and all functions that are currently running
     // with a lower counter stop. Seems there is no other way?
     // https://stackoverflow.com/questions/26298500/stop-pending-async-function-in-javascript
-    console.log("Starting _forceAddInCache", "from", idFrom, "to", idToExcluded);
+    console.debug("Starting _forceAddInCache", "from", idFrom, "to", idToExcluded);
     // Make sure they are not too large, and properly ordered
     if(idFrom >= this.allNonDecodedFrames.length) { return -1 }
     idToExcluded = Math.min(idToExcluded, this.allNonDecodedFrames.length);
@@ -425,13 +425,13 @@ class GetAnyFrame {
     var nextElementToDecode = null;
     // If we are after the frame that will be decoded next, and if we share the same parent key, we can
     // just continue to decode normally, otherwise we first need to reset:
-    console.log(idFrom, this.allNonDecodedFrames[idFrom].idParentKeyFrame, this.idOfNextDecodedKeyFrame);
+    console.debug(idFrom, this.allNonDecodedFrames[idFrom].idParentKeyFrame, this.idOfNextDecodedKeyFrame);
     if (idFrom >= this.idOfNextDecodedKeyFrame
         && this.idOfNextDecodedKeyFrame !== null
         && this.allNonDecodedFrames[idFrom].idParentKeyFrame
       == this.allNonDecodedFrames[this.idOfNextDecodedKeyFrame].idParentKeyFrame
     ) {
-      console.log("I can just continue my usual work, starting to decode frame ", this.nextFrameToAskForDecode);
+      console.debug("I can just continue my usual work, starting to decode frame ", this.nextFrameToAskForDecode);
     } else {
       console.log("We will reset the decoder.");
       // We restart from a completely unrelated keyframe: we need to reset the decoder. If not we reset:
@@ -440,16 +440,16 @@ class GetAnyFrame {
       // efficiency here, but this is done only when we do a jump of frames)
       this.decoder.configure(this.decoderConfig);
       // If we reset, we need to restart from a key frame:
-      console.log("this.allNonDecodedFrames[idFrom]", idFrom, this.allNonDecodedFrames[idFrom]);
+      console.debug("this.allNonDecodedFrames[idFrom]", idFrom, this.allNonDecodedFrames[idFrom]);
       nextElementToDecode = this.allNonDecodedFrames[idFrom].idParentKeyFrame;
       this.idOfNextDecodedKeyFrame = nextElementToDecode;
       this.nextFrameToAskForDecode = nextElementToDecode;
       /* for(var j = this.allNonDecodedFrames[idFrom].idParentKeyFrame; j < idToExcluded; j++){
-       *   console.log("_forceAddInCache: decode ", j);
+       *   console.debug("_forceAddInCache: decode ", j);
        *   this.decoder.decode(this.allNonDecodedFrames[j].nonDecodedFrame);
        * } */
     } 
-    console.log("We will start by decoding", this.nextFrameToAskForDecode);
+    console.debug("We will start by decoding", this.nextFrameToAskForDecode);
     // We send decode until we find our beloved element (we can also try to saturate even more if needed
     // as done in the example). But before we remove the last element in case it is already in the cache.
     if (this.cachedFrames.has(idToExcluded)) {
@@ -461,7 +461,7 @@ class GetAnyFrame {
       if (this.decoder.decodeQueueSize > this.maxDecodeQueueSize) {
         console.log("The decoder is overwhelmed, let's wait before sending new stuff in the queue of size: ", this.decoder.decodeQueueSize);
       } else {
-        console.log("Starting to decoding frame ", this.nextFrameToAskForDecode, this.decoder.decodeQueueSize, this.maxDecodeQueueSize);
+        console.debug("Starting to decoding frame ", this.nextFrameToAskForDecode, this.decoder.decodeQueueSize, this.maxDecodeQueueSize);
         if(this.nextFrameToAskForDecode >= this.allNonDecodedFrames.length) {
           // We arrived at the end of the video: let us flush (unless someone else is already running this function)
           await this.abortIfNeeded(this.decoder.flush(), "flush");
@@ -475,9 +475,9 @@ class GetAnyFrame {
       // time to the decoder to run.
       // This is needed, otherwise the decoder will not have time to start its job and we will get into
       // an infinite loop.
-      console.log("Give a bit of time to decoder");
+      console.debug("Give a bit of time to decoder");
       await this.abortIfNeeded(wait(0), "foowait");
-      console.log("Decoder had enough time");
+      console.debug("Decoder had enough time");
     }
     return nextElementToDecode;
   }
@@ -487,7 +487,7 @@ class GetAnyFrame {
   }
   
   async _forceAddInCacheAndGarbageCollect(idFrom, idToExcluded, idFromGC, idToGC) {
-    console.log("In _forceAddInCacheAndGarbageCollect");
+    console.debug("In _forceAddInCacheAndGarbageCollect");
     await this.abortIfNeeded(this._forceAddInCache(idFrom, idToExcluded), "foo _forceAddInCacheAndGarbageCollect");
     if (idToGC === undefined) {
       idToGC = this.nextFrameToAskForDecode;
@@ -532,11 +532,11 @@ class GetAnyFrame {
       this.getFrameListener = null;
     }
     // TODO: make it more robust to race conditions.
-    console.log("Calling getFrame with i=", i);
+    console.debug("Calling getFrame with i=", i);
     // Will contain the result of _forceAddInCache
     var nextElementToDecode = -1;
     if (this.cachedFrames.has(i)) {
-      console.log("Frame", i, "already cached.")
+      console.debug("Frame", i, "already cached.")
       // The frame is already in the cache.
       // This is cool to see a cached frame, but we want to start the decoding of the next frames to have them
       // in due time. No need to do this optimization if we run backward (or at least not this way).
@@ -550,7 +550,7 @@ class GetAnyFrame {
       }
       return this.cachedFrames.get(i).frame;
     } else {
-      console.log("Frame", i, "NOT in the cache.")
+      console.debug("Frame", i, "NOT in the cache.")
       if(backward) {
         // For backward, we don't care te preserve the cache since it is in the other direction.
         // We do not await for efficiency reasons
@@ -559,15 +559,15 @@ class GetAnyFrame {
           this.allNonDecodedFrames[i].idParentKeyFrame, i + 1
         ));
       } else {
-        console.log("We will add in the cache", i, i + this.nbFramesDecodeInAdvance + 1);
+        console.debug("We will add in the cache", i, i + this.nbFramesDecodeInAdvance + 1);
         // We do not await for efficiency reasons
         silentlyAbort(this._forceAddInCacheAndGarbageCollect(i, i + this.nbFramesDecodeInAdvance + 1));
       }
       // If the decoder saturated, the frame might not be ready yet.
       if(!this.cachedFrames.has(i)) {
-        console.log("The frame is not arrived yet, I'm waiting for it to come…");
-        console.log("this.decoder.decodeQueueSize", this.decoder.decodeQueueSize);
-        console.log("this.abortIfNeeded 0", this.abortIfNeeded);
+        console.debug("The frame is not arrived yet, I'm waiting for it to come…");
+        console.debug("this.decoder.decodeQueueSize", this.decoder.decodeQueueSize);
+        console.debug("this.abortIfNeeded 0", this.abortIfNeeded);
         await this.abortIfNeeded(waitEventUntilWithAbort(
           self,
           "newCachedFrame",
@@ -578,7 +578,7 @@ class GetAnyFrame {
           this.abortIfNeeded.bind(this)
         ), "foo eiaunrst");
       }
-      console.log("We received the frame");
+      console.debug("We received the frame");
       return this.cachedFrames.get(i).frame;
     }
   }
@@ -684,7 +684,7 @@ class UsercancelledError extends Error {
   }
     
   isPlaying() {
-    console.log(this.animationFrameID);
+    console.debug(this.animationFrameID);
     return this.animationFrameID != null || this.isPlayingMaxSpeed;
   }
 
@@ -713,9 +713,9 @@ class UsercancelledError extends Error {
     if (!config) {
       config = {};
     }
-    console.log("File", file);
+    console.debug("File", file);
     let videoObjectURL = URL.createObjectURL(file);
-    console.log("url", videoObjectURL);
+    console.debug("url", videoObjectURL);
     await this.abortIfNeeded(this.loadVideoFileFromObjectURL(videoObjectURL, config), "In loadVideoFileFromFile");
     URL.revokeObjectURL(file); // revoke URL to prevent memory leak
   }
@@ -736,7 +736,7 @@ class UsercancelledError extends Error {
     // direction useful to play backward.
     this.playbackSpeed = 1;
     this.isLoadingVideo = true;
-    console.log(videoObjectURL);
+    console.debug(videoObjectURL);
     if (this.anyFrame) {
       this.anyFrame.close();
     }
@@ -751,25 +751,25 @@ class UsercancelledError extends Error {
     if (jsonComments) {
       try {
         this.jsonComments = JSON.parse(jsonComments);
-        console.log("The video contains the following json: ", this.jsonComments);
-        console.log("userjson", this.userConfig);
+        console.debug("The video contains the following json: ", this.jsonComments);
+        console.debug("userjson", this.userConfig);
         if (this.userConfig.stops) {
           if (typeof this.userConfig.stops === 'string' || this.userConfig.stops instanceof String) {
             this.setStopsFromString(this.userConfig.stops);
           } else {
             this.setStops(this.userConfig.stops);
           }
-          console.log("We got from the configuration the following list of stops:", this.stops);
+          console.debug("We got from the configuration the following list of stops:", this.stops);
         } else {
           if (this.jsonComments.stops) {
             this.stops = this.jsonComments.stops;
           } else {
             this.alert("The metadata contains no information about stops: " + jsonComments)
-            console.log(this.jsonComments);
+            console.debug(this.jsonComments);
           }
         }
       } catch (e) {
-        console.log("Error: could not load the json due to a syntax error " + jsonComments, e);
+        console.error("Error: could not load the json due to a syntax error " + jsonComments, e);
         this.alert("Error: could not load the json due to a syntax error" + jsonComments);
       }
     } else {
@@ -801,7 +801,7 @@ class UsercancelledError extends Error {
   async _onFinishDemuxer() {
     this.isReady = true;
     // We draw the first frame
-    console.log("Foo");
+    console.debug("Foo");
     await this.abortIfNeeded(wait(0), "onFinishDemuxer"); // This is needed or the decoder will not get the time to run
     await this.abortIfNeeded(this.gotoFrame(0), "eianlpés");
   }
@@ -844,14 +844,14 @@ class UsercancelledError extends Error {
     // fill the canvas with black
     this.ctx.fillStyle = "black";
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    // console.log("I will draw the frame", frame);
+    // console.debug("I will draw the frame", frame);
     this.ctx.drawImage(frame, this.canvas.width/2-w/2, this.canvas.height/2-h/2, w, h);
   }
 
   // like _drawFrame but takes as argument the index of the frame, and loops with requestAnimationFrame
   // until the frame is loaded if the file is not yet ready to use.
   async _drawFrameFromIndex(i, backward, forceInRange) {
-    console.log("_drawFrameFromIndex", i);
+    console.debug("_drawFrameFromIndex", i);
     this._ensureStoppedAnimationFrameFetching();
     if(forceInRange) {
       if (i < 0) {
@@ -875,7 +875,7 @@ class UsercancelledError extends Error {
   }
 
   async _gotoFrame(i) {
-    console.log("goto",i);
+    console.debug("goto",i);
     this._ensureStoppedAnimationFrame();
     await this.abortIfNeeded(this._drawFrameFromIndex(i, undefined, true), "eiauyd");
     // triggers a refresh
@@ -945,9 +945,9 @@ class UsercancelledError extends Error {
 
   // play at the max FPS allowed by the screen refresh rate.
   async _playAtMaxSpeed() {
-    console.log("Playing max speed", this.isPlayingMaxSpeed);
+    console.debug("Playing max speed", this.isPlayingMaxSpeed);
     if (!this.isPlayingMaxSpeed) {
-      console.log("Finished to draw, stopped by user.");
+      console.debug("Finished to draw, stopped by user.");
       this._ensureStoppedAnimationFrame();
       return;
     }
@@ -959,7 +959,7 @@ class UsercancelledError extends Error {
     }
     else {
       this.isPlayingMaxSpeed = false;
-      console.log("Finished to draw");
+      console.debug("Finished to draw");
       this._ensureStoppedAnimationFrame();
     }
   }
@@ -968,8 +968,8 @@ class UsercancelledError extends Error {
   // frame is optional, return the next stop. It might return Infinity if there is none
   getNextStop(frame) {
     const initialFrame = frame || this.currentFrame;
-    console.log(this.stops);
-    console.log(initialFrame)
+    console.debug(this.stops);
+    console.debug(initialFrame)
     const st = this.stops.filter(e => e > initialFrame);
     if (st.length == 0) {
       return Infinity
@@ -987,46 +987,46 @@ class UsercancelledError extends Error {
 
   // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
   async playUntilNextStop(stop) {
-    console.log("I am starting playUntilNextStop");
+    console.debug("I am starting playUntilNextStop");
     this._stopOtherFunctions();
     // If we click while playing, we jump to the stop directly:
-    console.log("called playuntil");
+    console.debug("called playuntil");
     if (!this.isReady) {
-      console.log("The file is not yet ready, wait a bit more.");
+      console.debug("The file is not yet ready, wait a bit more.");
       return
     }
     if (this.isPlayingUntil != undefined) {
-      console.log("I am playing until");
+      console.debug("I am playing until");
       await this.abortIfNeeded(this._gotoFrame(this.isPlayingUntil), "nrststs");
       return
     }
     if (this.isPlayingUntilPrevious != undefined) {
-      console.log("I am playing until previous");
+      console.debug("I am playing until previous");
       await this.abortIfNeeded(this._gotoFrame(this.currentFrame), "ssss");
       return
     }
-    console.log("We were apparently not playing");
+    console.debug("We were apparently not playing");
     // We first compute the next stop
     this.initialFrame = this.currentFrame;
     const nextStop = stop || this.getNextStop();
-    console.log(nextStop, stop);
+    console.debug(nextStop, stop);
     // https://stackoverflow.com/questions/30795525/performance-now-vs-date-now
     this.initTime = performance.now();
     this.isPlayingUntil = nextStop;
     const playAux = async () => {
       const deltaTime = (performance.now() - this.initTime)/1000;
       var frameToDisplay = Math.min(Math.round(deltaTime * this.fps * this.playbackSpeed) + this.initialFrame, nextStop);
-      console.log("frameToDisplay", frameToDisplay);
+      console.debug("frameToDisplay", frameToDisplay);
       // To check if a frame jump were supposed to happend.
       var frameJump = false;
       // If we were supposed to jump a frame...
       if (frameToDisplay > this.currentFrame+1) {
         // ... well we don't jump and reinitialize the time. Otherwise, if we jump it could create huge
         // ugly jumps, even if the decoder is only slightly too slow.
-        console.log("jump: We were supposed to have a frame jump, from ", this.currentFrame, " to ", frameToDisplay);
+        console.debug("jump: We were supposed to have a frame jump, from ", this.currentFrame, " to ", frameToDisplay);
         frameToDisplay = this.currentFrame+1;
         frameJump = true;
-        console.log("jump: so instead we will draw ", frameToDisplay);
+        console.debug("jump: so instead we will draw ", frameToDisplay);
       }
       const notTheLastOne = await this.abortIfNeeded(this._drawFrameFromIndex(frameToDisplay), "meriuast");
       if (frameJump) {
@@ -1038,7 +1038,7 @@ class UsercancelledError extends Error {
         await this.abortIfNeeded(playAux(), "nsrtsnrt");
       }
       else {
-        console.log("stop", this.stops);
+        console.debug("stop", this.stops);
         this.isPlayingUntil = undefined;
         this._ensureStoppedAnimationFrame();
       }
@@ -1050,11 +1050,11 @@ class UsercancelledError extends Error {
   async playUntilPreviousStop(stop) {
     this._stopOtherFunctions();
     if (!this.isReady) {
-      console.log("The file is not yet ready, wait a bit more.");
+      console.debug("The file is not yet ready, wait a bit more.");
       return
     }
     // If we click while playing, we jump to the stop directly:
-    console.log("called playuntilprevious");
+    console.debug("called playuntilprevious");
     if (this.isPlayingUntilPrevious != undefined) {
       await this.abortIfNeeded(this._gotoFrame(this.isPlayingUntilPrevious), "nerstnrst");
       return
@@ -1069,13 +1069,13 @@ class UsercancelledError extends Error {
     // We first compute the next stop
     this.initialFrame = this.currentFrame;
     const nextStop = stop || this.getPreviousStop();
-    console.log("Will play until ", nextStop);
+    console.debug("Will play until ", nextStop);
     this.initTime = performance.now();
-    console.log(nextStop);
+    console.debug(nextStop);
     this.isPlayingUntilPrevious = nextStop;
     const playAux = async () => {
       const deltaTime = (performance.now() - this.initTime)/1000;
-      console.log(deltaTime, this.fps, this.playbackSpeed, this.initialFrame, nextStop);
+      console.debug(deltaTime, this.fps, this.playbackSpeed, this.initialFrame, nextStop);
       var frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + this.initialFrame, nextStop);
       // To check if a frame jump were supposed to happend.
       var frameJump = false;
@@ -1083,10 +1083,10 @@ class UsercancelledError extends Error {
       if (frameToDisplay < this.currentFrame-1) {
         // ... well we don't jump and reinitialize the time. Otherwise, if we jump it could create huge
         // ugly jumps, even if the decoder is only slightly too slow.
-        console.log("jump: We were supposed to have a frame jump, from ", this.currentFrame, " to ", frameToDisplay);
+        console.debug("jump: We were supposed to have a frame jump, from ", this.currentFrame, " to ", frameToDisplay);
         frameToDisplay = this.currentFrame-1;
         frameJump = true;
-        console.log("jump: so instead we will draw ", frameToDisplay);
+        console.debug("jump: so instead we will draw ", frameToDisplay);
       }
 
       const notTheLastOne = await this.abortIfNeeded(this._drawFrameFromIndex(frameToDisplay, true), "seseses");
@@ -1099,7 +1099,7 @@ class UsercancelledError extends Error {
         await this.abortIfNeeded(playAux(), "ssediuatdlt");
       }
       else {
-        console.log("stop");
+        console.debug("stop");
         this.isPlayingUntilPrevious = undefined;
         this._ensureStoppedAnimationFrame();
       }
@@ -1112,7 +1112,7 @@ class UsercancelledError extends Error {
   async gotoPreviousStop(stop) {
     this._stopOtherFunctions();
     if (!this.isReady) {
-      console.log("The file is not yet ready, wait a bit more.");
+      console.debug("The file is not yet ready, wait a bit more.");
       return
     }
     // First stop the play
@@ -1172,9 +1172,9 @@ class UsercancelledError extends Error {
       await this.abortIfNeeded(this._drawFrameFromIndex(this.currentFrame), "eisisiss");
       await this.abortIfNeeded(this.waitRedraw(), "tzelleds");
       this._ensureStoppedAnimationFrame(); // otherwise it thinks that it is still playing.
-      console.log("we are not playing")
+      console.debug("we are not playing")
     } else {
-      console.log("we are playing")
+      console.debug("we are playing")
     }
   }
 
@@ -1227,7 +1227,7 @@ class UsercancelledError extends Error {
     try {
       switch (actionType) {
         case 'loadVideoFileFromObjectURL':
-          console.log("userconfig action", actionData.config);
+          console.debug("userconfig action", actionData.config);
           await this.loadVideoFileFromObjectURL(actionData.videoObjectURL, actionData.config);
           break;
         case 'playUntilNextStop':
@@ -1289,7 +1289,7 @@ class UsercancelledError extends Error {
           self.postMessage({actionID: actionID, result: this.getCurrentFrame()});
           break;
         case 'getNumberOfPages':
-          console.log("actionID", actionID);
+          console.debug("actionID", actionID);
           const nbPages = this.getNumberOfPages();
           self.postMessage({actionID: actionID, result: nbPages});
           break;
@@ -1321,11 +1321,11 @@ class UsercancelledError extends Error {
     } catch (error) {
       console.log("catch: We just got error", error);
       // We do not want to display errors for the error we get when the user pressed twice a given key
-      if (!error.silentCatch) {
-        // throw error;
+      if (!(error instanceof UsercancelledError)) {
+        throw error;
       }
     }
-    console.log("catch: We finished the function");
+    console.debug("catch: We finished the function");
   }
 }
 
