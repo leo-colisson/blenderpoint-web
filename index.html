@@ -31,6 +31,7 @@
       <li><code>f</code>: go to a specific frame</li>
       <li><code>g</code>: go to a specific page</li>
       <li><code>l</code>: print information on the current frame in the console (<code>F12 > console</code>)</li>
+      <li><code>L</code>: print generic information, notably on the list of stops, in the console (<code>F12 > console</code>)</li>
       <li><code>a</code>: add current frame to stops, and print the list of stops in the console (<code>F12 > console</code>)</li>
       <li><code>r</code>: remove current frame from stops</li>
       <li><code>S</code>: manually specify the list of stops</li>
@@ -38,7 +39,7 @@
 
     <h2>Documentation</h2>
 
-    <p>This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not stable, notably playing videos longer than around 1mn will crash the tab as we load all frames in memory, the reason being that browser cannot easily go to a precise frame with the default mechanism). To specify the stops (that you can obtain by using the <code>a</code> and <code>r</code> keys, cf documentation above), you can either press the <code>S</code> key, or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):</p>
+    <p>This plays a video and stops at specific fixed frames called "stops" (WARNING: this is still not considered as stable due to the lack of tests, polishments, and the fact that it is not tested in Firefox. See TODO for more details.). To specify the stops (that you can obtain in console (<code>F12 > console</code>) by using the <code>L</code> key, cf documentation above), you can either press the <code>S</code>/<code>a</code>/<code>r</code> keys (cf. documentation above), or add in the comments of the video something like this (In VLC you can see and edit the comments of a video via <code>Tools > Media information</code> or <code>Ctrl-I</code>):</p>
     
     <code>
       <pre>
@@ -56,17 +57,38 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       <code>
         <pre>
 https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4&stops=10,20,50</pre>
-      </code>      
+      </code>
+      You can also override the stops of a any file that you load locally (even if stops are contained in the video file), but for that you need to use:
+      <code>
+        <pre>
+https://leo-colisson.github.io/blenderpoint-web/forceStops=10,20,50</pre>
+      </code>
     </p>
 
+    <h2>Acknowledgment</h2>
+
+    I'd like to thank <a href="https://github.com/w3c/webcodecs/issues/753">sandersdan</a> that provided very useful advices to make this more efficient. 
+    
     <h2>TODO and known bugs</h2>
     <ul>
-      <li>Fix issue with large videos consuming all memory</li>
+      <li>Some frames are not closed before garbage collection, no idea why. In practice it seems to be no problem, but check memory consumption.</li>
       <li>Print a small icon when playing</li>
       <li>Make nicer GUI</li>
       <li>Document the JSON format</li>
+      <li>For now the video cannot play sound. Try to get inspiration from the video/audio example of w3m to add support for sound.</li>
+      <li>Test on different OS to ensure it works (no reasons to see why it would fail, but still)</li>
+      <li>Make it work for non Chrome-based browser (webcodec needed to decode for now, apparently Firefox will implement it soonish, but in the meantime we can maybe use a firefox-specific decoder). Note that ffmpeg would certainly be too slow for decoding in real time.</li>
+      <li>Print more informations with <code>L</code>, like the stops separated per video chunks.</li>
+      <li>For now we hardcode the options to configure the number of frames to cache etc (tradeoff between speed and memory). It might be nicer to allow the user to choose them, or, additionally, to automatically detect the available cache size depending on the remaining space.</li>
+      <li>Automatically cache all stops to quickly navigate</li>
+      <li>Prints a table of all pages and/or content to quickly jump anywhere in the document</li>
+      <li>Create two modes, one where backward is not continuous, and one where it is continuous (not super efficient since for now there are some small pauses due to how videos are encoded, harder to quickly go backward to find a specific frame, and this can be confusing since we never know the direction, but in some specific cases people might still want it).</li>
+      <li>Prints a nice message while loading the video</li>
+      <li>Provides a way to start the show before fetching the whole video (would require the MOOC box of the video to be placed before the main content to get the JSON file)</li>
+      <li>Allow more advanced content like js animations etc to write interactive content (but still fallback to video if not displayed in a browser)</li>
     </ul>
-
+    
+    
     <script type="module">
       // https://github.com/w3c/webcodecs/issues/87
       // Terminology:
@@ -83,32 +105,32 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       import getVideoFrames from "./getVideoFrames.js/mod.js"
 
       class BlenderpointVideo {
-        constructor(canvas, config) {
+        constructor(canvas, config) {          
           config = config || {};
           this.canvas = canvas;
-          this.ctx = this.canvas.getContext("2d");
-          this.isLoadingVideo = false;
-          // `frames` is a list of VideoFrame object: https://developer.mozilla.org/en-US/docs/Web/API/VideoFrame
-          this.frames = [];
-          this.total_nb_frames = 0; // this might not even be set if the video is not fully loaded.
-          this.videoWidth = 0;
-          this.videoHeight = 0;
-          this.fps = 24;
-          // This will help requestAnimationFrame
-          this.currentFrame = 0;
-          this.timeLastDraw = null;
-          this.lastDrawnFrame = -1; // helpful to know if we need to redraw the frame or not.
-          // playbackSpeed is the speed of playing: 0 means that it does not play, 1 it plays at normal speed forward,
-          // -1 it plays at normal speed backward, 1.5 it plays at speed x1.5…
-          this.playbackSpeed = 1;
-          this.isPlayingUntil = undefined;
-          this.isPlayingUntilPrevious = undefined;
-          this.animationFrameID = null;
-          // we might also call request animation frame if the user wants to display something on screen
-          // while the video is not yet loaded, use this for that use case.
-          this.animationFrameIDFetching = null;
-          this.stops = []; // contains the list of stops
-          this.jsonComments = {}; // contains the content of the json in the comments of the video
+          console.log("I will start the worker");
+          this.worker = new Worker('worker.js', { type: "module" });
+          this.offscreen = canvas.transferControlToOffscreen();
+          this.worker.postMessage({
+            canvas: this.offscreen,
+            config: config
+          }, [this.offscreen]);
+          /* this.worker.addEventListener("message", (msg) => {
+           *   if (msg.data.error) {
+           *     alert(msg.data.error);
+           *   }
+           *   if (msg.data.alert) {
+           *     alert(msg.data.alert);
+           *   }
+           * }); */
+          this.worker.onmessage = (msg) => {
+            if (msg.data.error) {
+              alert(msg.data.error);
+            }
+            if (msg.data.alert) {
+              alert(msg.data.alert);
+            }
+          };
           this.alert = (m) => alert(m);
           this.frameLog = (m) => console.log(m);
           // add shorcuts
@@ -117,11 +139,41 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
           addEventListener("fullscreenchange", async (event) => {
             if (!document.fullscreenElement) {
               // we are quitting fullscreen mode
-              this.canvas.width = this.origCanvasWidth;
-              this.canvas.height = this.origCanvasHeight;
-              // we redraw the canvas as the canvas is cleared.
-              this.redrawWhenResolutionChanges();
+              this.__runAction("restoreCanvasSize");
             }
+          });
+        }
+
+        __runAction(actionType, actionData){
+          console.log("__runAction", actionType, actionData);
+          this.worker.postMessage({
+            blenderpointActionType: actionType,
+            blenderpointActionData: actionData
+          });
+        }
+
+        async __runActionWithAnswer(actionType, actionData){
+          const actionID = crypto.randomUUID();
+          console.log("Sending message");
+          this.worker.postMessage({
+            actionID: actionID,
+            blenderpointActionType: actionType,
+            blenderpointActionData: actionData
+          });
+          console.log("Sending message");
+          return new Promise((resolve) => {
+            console.log("Waiting for answer");
+            const getAnswer = (msg) => {
+              console.log("Just got an answer", msg.data, msg.data.result, msg.data.actionID, actionID);
+              if (msg.data.actionID == actionID) {
+                // We remove the event listener
+                this.worker.removeEventListener("message", getAnswer);
+                // We continue
+                console.log("I will return ", msg.data.result);
+                resolve(msg.data.result);
+              }
+            };
+            this.worker.addEventListener("message", getAnswer);
           });
         }
 
@@ -129,271 +181,82 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
           this.alert = new_alert;
         }
         
-        // extracts the json from the video
-        // must be in a meta field like comment, and enclosed between BLENDERPOINTSTART and BLENDERPOINTSTOP
-        extractJsonFromVideo(mp4boxFile) {
-          const metaBoxes = mp4boxFile.getBoxes("meta");
-          const decoder = new TextDecoder('utf-8');
-          var content = null;
-          metaBoxes.forEach((metaBox) => {
-            var str = decoder.decode(metaBox.data);
-            // https://stackoverflow.com/questions/1979884/how-to-use-javascript-regex-over-multiple-lines
-            // [\s\S] is for empty lines, *? is for the non-greedy search
-            const matches = [...str.matchAll(/BLENDERPOINTSTART([\s\S]*?)BLENDERPOINTSTOP/g)];
-            if (matches.length > 0) {
-              content = matches[0][1];
-            }
-          });
-          return content;
-        }
-        
-        isPlaying() {
-          console.log(this.animationFrameID);
-          return this.animationFrameID != null;
-        }
+
+////        isPlaying() {
+////          console.log(this.animationFrameID);
+////          return this.animationFrameID != null;
+////        }
 
         setFps(fps) {
-          this.fps = fps;
+          this.__runAction(fps);
         }
 
 	setStops(stops) {
-	  this.stops = stops;
+          this.__runAction("setStops", stops);
 	}
 
-        getStops() {
-	  return this.stops;
+        async getStops() {
+          return await __runActionWithAnswer("getStops");
 	}
 
 	setStopsFromString(stops) {
-	  this.stops = [...new Set(stops.split(",").map(e => parseInt(e)))].sort(function(a, b) {
+	  this.setStops([...new Set(stops.split(",").map(e => parseInt(e)))].sort(function(a, b) {
             return a - b;
-          });
+          }));
 	}
 
         // call it like:
         // <input type="file" accept="video/mp4" onchange="bpVideo.loadVideoFile(this.files[0])">
         // config might contain additional parameters, notably callbacks
         async loadVideoFileFromFile(file, config) {
-          if (!config) {
-            config = {};
-          }
-          console.log("File", file);
-          let videoObjectURL = URL.createObjectURL(file);
-          console.log("url", videoObjectURL);
-          await this.loadVideoFileFromObjectURL(videoObjectURL, config);
-          URL.revokeObjectURL(file); // revoke URL to prevent memory leak
+          this.__runAction("loadVideoFileFromFile", {file: file, config: config});
         }
 
         // You can pass both object url, or normal url like https://leo-colisson.github.io/blenderpoint-web/Demo_24fps.mp4
         async loadVideoFileFromObjectURL(videoObjectURL, config) {
-          if (!config) {
-            config = {};
-          }
-          // turn to true when the stops are obtained
-          this.isReady = false;
-          this._ensureStoppedAnimationFrame();
-          // We don’t know yet the number of frames
-          this.total_nb_frames = 0;
-          this.frames.forEach((frame) => frame.close());
-          this.frames = [];
-          this.currentFrame = 0;
-          this.lastDrawnFrame = -1;
-          // direction useful to play backward.
-          this.playbackSpeed = 1;
-          this.isLoadingVideo = true;
-          console.log(videoObjectURL);
-          self = this; // otherwise self is replaced with a new self value
-          await getVideoFrames({
-            videoUrl: videoObjectURL,
-            onFrame(frame) {
-              self.frames.push(frame);
-              // we print the first frame on screen
-              if (self.frames.length == 1) {
-                self._drawFrameFromIndex(0);
-              }
-              if (config.onFrame) {
-		config.onFrame(frame, self.frames.length);
-              }
-            },
-            onConfig(conf) {
-              self.videoWidth = conf.codedWidth;
-              self.videoHeight = conf.codedHeight;
-              if (config.onConfig) {
-		config.onConfig();
-              }
-              console.log(conf.mp4boxFile);
-              console.log(conf.info);
-              const fps = conf.info.videoTracks[0].nb_samples / (conf.info.videoTracks[0].samples_duration / conf.info.videoTracks[0].timescale);
-              console.log("fps", fps);
-              if (fps < 120) {
-                this.fps = fps;
-                console.log("Setting fps to " + fps);
-              } else {
-                console.log("Found weird fps settings, default to 24fps: " + fps);
-                this.fps = fps;
-              }
-              // self.mp4boxFile = conf.mp4boxFile;
-              const jsonComments = self.extractJsonFromVideo(conf.mp4boxFile);
-              if (jsonComments) {
-                try {
-                  self.jsonComments = JSON.parse(jsonComments);
-                  console.log("The video contains the following json: ", self.jsonComments)
-                  if (config.stops) {
-                    if (typeof config.stops === 'string' || config.stops instanceof String) {
-                      self.setStopsFromString(config.stops);
-                    } else {
-                      self.setStops(config.stops);
-                    }
-                    console.log("We got from the configuration the following list of stops:", self.stops);
-                  } else {
-                    if (self.jsonComments.stops) {
-                      self.stops = self.jsonComments.stops;
-                    } else {
-                      self.alert("The metadata contains no information about stops: " + jsonComments)
-                      console.log(self.jsonComments);
-                    }
-                  }
-                } catch (e) {
-                  console.log("Error: could not load the json due to a syntax error " + jsonComments, e);
-                  self.alert("Error: could not load the json due to a syntax error" + jsonComments);
-                }
-              } else {
-                self.alert("No json in the video, you need to load it manually.");
-              }
-              self.isReady = true;
-            },
-            onFinish() {
-              console.log("Video loaded.");
-              self.isLoadingVideo = false;
-              self.total_nb_frames = self.frames.length;
-              if (config.onFinish) {
-		config.onFinish();
-              }
-            },
-          });
+          this.__runAction("loadVideoFileFromObjectURL", {videoObjectURL: videoObjectURL, config: config});
         }
 
-        _ensureStoppedAnimationFrameFetching() {
-          if (this.animationFrameIDFetching) {
-            cancelAnimationFrame(this.animationFrameIDFetching)
-            this.animationFrameIDFetching = null;
-          }
-        }
-
-        // Basically all animations should start and stop with this._ensureStoppedAnimationFrame()
-        _ensureStoppedAnimationFrame() {
-          this.isPlayingUntil = undefined;
-          this.isPlayingUntilPrevious = undefined;
-          this._ensureStoppedAnimationFrameFetching();
-          if (this.animationFrameID) {
-            cancelAnimationFrame(this.animationFrameID)
-            this.animationFrameID = null;
-          }
-        }
-
-        // Draw a frame on the canvas.
-        // warning: for this to work, make sure to put it into an animationFrame or to call waitRedraw
-        _drawFrame(frame) {
-          // fit in the canvas while preserving the proportions
-          const aspectRatioCanvas = this.canvas.width/this.canvas.height;
-          const aspectRatioFrame = this.videoWidth/this.videoHeight;
-          var w;
-          var h;
-          if (aspectRatioFrame >= aspectRatioCanvas) {
-            // maximum width
-            w = this.canvas.width;
-            h = w/aspectRatioFrame;
-          } else {
-            // maximum height
-            h = this.canvas.height;
-            w = h*aspectRatioFrame;
-          }
-          // fill the canvas with black
-          this.ctx.fillStyle = "black";
-          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-          this.ctx.drawImage(frame, this.canvas.width/2-w/2, this.canvas.height/2-h/2, w, h);
-        }
-
-        // like _drawFrame but takes as argument the index of the frame, and loops with requestAnimationFrame
-        // until the frame is loaded if the file is not yet ready to use.
-        async _drawFrameFromIndex(i, silentError) {
-          this._ensureStoppedAnimationFrameFetching();
-          if (i < this.frames.length) {
-            this._drawFrame(this.frames[i]);
-            this.currentFrame = i;
-            this.lastDrawnFrame = i;
-            this._ensureStoppedAnimationFrameFetching();
-            return true;
-          } else if (this.isLoadingVideo) {
-            return await new Promise(resolve => {
-              this.animationFrameIDFetching = requestAnimationFrame(async () => {return await this._drawFrameFromIndex(i, silentError); resolve()});
-            });
-          } else if (i = Infinity) {
-            return await this._drawFrameFromIndex(this.frames.length-1, silentError);
-          } else {
-            if(!silentError){
-              const str = `Error: Unreachable frame (frame ${i} bigger than ${this.frames.length}).`;
-              this.alert(str);
-              console.log(str);
-              throw new Error(str);
-            }
-            return false;
-          }
-        }
 
         async gotoFrame(i) {
-	  console.log("goto",i);
-          this._ensureStoppedAnimationFrame();
-          await this._drawFrameFromIndex(i);
-          // triggers a refresh
-          await this.waitRedraw();
-          this._ensureStoppedAnimationFrame();
+	  this.__runAction("gotoFrame", i);
         }
 
         async gotoPage(i) {
-          const pages = [...new Set([...this.stops, 0, Infinity])];
-          if (i >= pages.length) {
-            await this.gotoFrame(Infinity)
-          } else {
-            await this.gotoFrame(pages[i])
-          }
+	  this.__runAction("gotoPage", i);
         }
 
-        getCurrentPage() {
-          const pages = [...new Set([...this.stops, 0, Infinity])];
-          return pages.filter(e => e <= this.currentFrame).reduce((iMax, x, i, arr) => x > arr[iMax] ? i : iMax, 0);
-        }
         
-        getNumberOfFramesIfPossible() {
-          if (!this.isLoadingVideo) {
-            return this.frames.length;
-          } else if (this.jsonComments?.finalVideo?.length) {
-            return this.jsonComments?.finalVideo?.length;
-          } else {
-            return null
-          }
+        async getCurrentPage() {
+          return await this.__runActionWithAnswer("getCurrentPage");
         }
 
-        getNumberOfPages() {
-          const nbFrames = this.getNumberOfFramesIfPossible();
-          if (nbFrames) {
-            return [...new Set([...this.stops, 0, nbFrames-1])].length;
-          } else {
-            return [...new Set([...this.stops, 0])].length;
-          }
+        async getCurrentFrame() {
+          return await this.__runActionWithAnswer("getCurrentFrame");
         }
 
-        async gotoPageGUI(i) {
-          const nbPages = this.getNumberOfPages();
-          const answer = prompt("To which page do you want to go? (currently " + this.getCurrentPage() + "/" + nbPages + ")");
+        async getNumberOfFramesIfPossible() {
+          return await this.__runActionWithAnswer("getNumberOfFramesIfPossible");
+        }
+
+        async getNumberOfPages() {
+          return await this.__runActionWithAnswer("getNumberOfPages");
+        }
+
+        async gotoPageGUI() {
+          const nbPages = await this.getNumberOfPages();
+          console.log("The nbPages is", nbPages);
+          const currentPage = await this.getCurrentPage();
+          const answer = prompt("To which page do you want to go? (currently " + (currentPage + 1) + "/" + nbPages + ")");
           if (answer) {
-            this.gotoPage(parseInt(answer));
+            this.gotoPage(parseInt(answer-1));
           }
-        }
+        }        
 
-        async gotoFrameGUI(i) {
-          const nbFrames = this.getNumberOfFramesIfPossible();
-          const answer = prompt("To which frame do you want to go? (currently " + this.currentFrame + "/" + nbFrames + ")");
+        async gotoFrameGUI() {
+          const nbFrames = await this.getNumberOfFramesIfPossible();
+          const currentFrame = await this.getCurrentFrame();
+          const answer = prompt("To which frame do you want to go? (currently " + currentFrame + "/" + nbFrames + ")");
           if (answer) {
             this.gotoFrame(parseInt(answer));
           }
@@ -402,241 +265,73 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
         async specifyStopsGui(i) {
           const answer = prompt("Provide the list of stops to use (e.g. '1, 2, 3').");
           if (answer) {
-            this.stops = [...new Set(answer.split(",").map(e => parseInt(e)))].sort(function(a, b) {
+            this.setStops([...new Set(answer.split(",").map(e => parseInt(e)))].sort(function(a, b) {
               return a - b;
-            });
+            }));
           }
-        }
-        
-        
-        // call "await this.waitRedraw()" to wait for animationFrame to
-        waitRedraw() {
-          return new Promise(resolve => {
-            this.animationFrameID = requestAnimationFrame(() => {resolve()});
-          });
         }
 
         // play at the max FPS allowed by the screen refresh rate.
         async playAtMaxSpeed() {
-          const nextFrame = this.currentFrame + 1;
-          const notTheLastOne = await this._drawFrameFromIndex(nextFrame, true);
-          if(notTheLastOne) {
-            await this.waitRedraw();
-            this.playAtMaxSpeed();
-          }
-          else {
-            console.log("Finished to draw");
-            this._ensureStoppedAnimationFrame();
-          }
-        }
-
-        // frame is optional, return the next stop. It might return Infinity if there is none
-        getNextStop(frame) {
-          const initialFrame = frame || this.currentFrame;
-          console.log(this.stops);
-          console.log(initialFrame)
-          const st = this.stops.filter(e => e > initialFrame);
-          if (st.length == 0) {
-            return Infinity
-          } else {
-            return Math.min(...st);
-          }
-        }
-
-        // frame is optional
-        getPreviousStop(frame) {
-          const initialFrame = frame || this.currentFrame;
-          const st = this.stops.filter(e => e < initialFrame);
-          return Math.max(0, ...st);
+          this.__runAction("playAtMaxSpeed");
         }
 
         // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
         async playUntilNextStop(stop) {
-          // If we click while playing, we jump to the stop directly:
-          console.log("called playuntil");
-          if (!this.isReady) {
-            console.log("The file is not yet ready, wait a bit more.");
-            return
-          }
-          if (this.isPlayingUntil != undefined) {
-            console.log("I am playing until");
-            await this.gotoFrame(this.isPlayingUntil);
-            return
-          }
-          if (this.isPlayingUntilPrevious != undefined) {
-            console.log("I am playing until previous");
-            await this.gotoFrame(this.currentFrame);
-            return
-          }
-          console.log("We were apparently not playing");
-          // We first compute the next stop
-          const initialFrame = this.currentFrame;
-          const nextStop = stop || this.getNextStop();
-          console.log(nextStop, stop);
-          const initTime = Date.now();
-          this.isPlayingUntil = nextStop;
-          const playAux = async () => {
-	    const deltaTime = (Date.now() - initTime)/1000;
-	    const frameToDisplay = Math.min(Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
-	    const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
-            if(notTheLastOne && frameToDisplay < nextStop) {
-              await this.waitRedraw();
-              await playAux();
-            }
-            else {
-              console.log("stop");
-              this.isPlayingUntil = undefined;
-              this._ensureStoppedAnimationFrame();
-            }
-	  }
-          await playAux();
+          this.__runAction("playUntilNextStop", stop);
         }
         
         // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
         async playUntilPreviousStop(stop) {
-          if (!this.isReady) {
-            console.log("The file is not yet ready, wait a bit more.");
-            return
-          }
-          // If we click while playing, we jump to the stop directly:
-          console.log("called playuntilprevious");
-          if (this.isPlayingUntilPrevious != undefined) {
-            await this.gotoFrame(this.isPlayingUntilPrevious);
-            return
-          }
-          // if we were playing forward, we stop here
-          if (this.isPlayingUntil != undefined) {
-            await this.gotoFrame(this.currentFrame);
-            return
-          }
-          // First stop the play
-          this._ensureStoppedAnimationFrame()
-          // We first compute the next stop
-          const initialFrame = this.currentFrame;
-          const nextStop = stop || this.getPreviousStop();
-          console.log("Will play until ", nextStop);
-          const initTime = Date.now();
-          console.log(nextStop);
-          this.isPlayingUntilPrevious = nextStop;
-          const playAux = async () => {
-	    const deltaTime = (Date.now() - initTime)/1000;
-	    const frameToDisplay = Math.max(-Math.round(deltaTime * this.fps * this.playbackSpeed) + initialFrame, nextStop);
-	    const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
-            if(notTheLastOne && frameToDisplay > nextStop) {
-              await this.waitRedraw();
-              await playAux();
-            }
-            else {
-              console.log("stop");
-              this.isPlayingUntilPrevious = undefined;
-              this._ensureStoppedAnimationFrame();
-            }
-	  }
-          await playAux();
+          this.__runAction("playUntilPreviousStop", stop)
         }
-
         
         // stop is optional, it will be automatially computed
         async gotoPreviousStop(stop) {
-          if (!this.isReady) {
-            console.log("The file is not yet ready, wait a bit more.");
-            return
-          }
-          // First stop the play
-          this._ensureStoppedAnimationFrame();
-          const previousStop = stop || this.getPreviousStop();
-          return await this.gotoFrame(previousStop);
+          this.__runAction("gotoPreviousStop");
         }
 
         async gotoPreviousFrame() {
-          await this.gotoFrame(this.currentFrame - 1)
+          this.__runAction("gotoPreviousFrame");
         }
 
         async gotoNextFrame() {
-          await this.gotoFrame(this.currentFrame + 1)
+          this.__runAction("gotoNextFrame");
         }
-
 
         async pause() {
-          this._ensureStoppedAnimationFrame();
+          this.__runAction("pause");
         }
 
+
         async togglePlayPause() {
-          if (this.isPlaying()) {
-            this._ensureStoppedAnimationFrame();
-          } else {
-            this.playUntilNextStop(Infinity)
-          }
+          this.__runAction("togglePlayPause");
         }
         
         async setCanvasFullScreen() {
-          /* When the openFullscreen() function is executed, open the video in fullscreen.
-             Note that we must include prefixes for different browsers, as they don't support the requestFullscreen method yet */
-          this.origCanvasWidth = this.canvas.width;
-          this.origCanvasHeight = this.canvas.height;
-
           if (this.canvas.requestFullscreen) {
+            //this.__runAction("setCanvasFullScreen");
             await this.canvas.requestFullscreen({navigationUI: "hide"});
-            this.canvas.width = window.innerWidth;
-            this.canvas.height = window.innerHeight;
+            this.__runAction("canvasChangeSize", {width: window.innerWidth, height: window.innerHeight});
           } else {
             this.alert("Fullscreen not supported on your browser? Try a more recent browser.");
           }
-          // we redraw the canvas as the canvas is cleared.
-          this.redrawWhenResolutionChanges()
         }
-
-        async redrawWhenResolutionChanges() {
-          if (!this.isPlaying()) { // No need to draw if it’s already playing
-            await this._drawFrameFromIndex(this.currentFrame);
-            await this.waitRedraw();
-            this._ensureStoppedAnimationFrame(); // otherwise it thinks that it is still playing.
-            console.log("we are not playing")
-          } else {
-            console.log("we are playing")
-          }
-        }
-
 
         close() {
-          this.frames.forEach(frame => {
-            frame.close();
-          });
+          this.__runAction("close");
         }
 
-        getInfoOnFrame(frame) {
-          var data = {frame: frame};
-          if (this.jsonComments.clipsIndex) {
-            for (var clip of this.jsonComments.clipsIndex) {
-              const relativeFrame = frame - clip.absoluteStart;
-              if (relativeFrame >= 0 && relativeFrame < clip.length) {
-                data.clipFilename = clip.filename;
-                data.clipAbsoluteStart = clip.absoluteStart
-                data.frameFinalPositionFromStartClip = relativeFrame;
-                if (clip.frameFinalToOriginal) {
-                  // frame number in the original clip
-                  data.originalLocalFrame = clip.frameFinalToOriginal[relativeFrame];
-                }
-                return data
-              }
-            }
-          }
-          return data;
+        async getInfoOnFrame(frame) {
+          return await this.__runActionWithAnswer("getInfoOnFrame", frame);
         }
-        
+
         logFrame(frame) {
-          var info = this.getInfoOnFrame(frame);
-          var message = "The final frame number is " + info.frame;
-          if (info.clipAbsoluteStart) {
-            message += " (= clip starting at frame " + info.clipAbsoluteStart + " + " + info.frameFinalPositionFromStartClip + " frames)";
-          }
-          if (info.clipFilename) {
-            message += ", extracted from the clip " + info.clipFilename;
-          }
-          if (info.originalLocalFrame) {
-            message += " at original position " + info.originalLocalFrame;
-          }
-          this.frameLog(message);
+          this.__runAction("logFrame", frame);
+        }
+
+        logGlobal() {
+          this.__runAction("logGlobal");
         }
 
         attributeKeyboardAndMouseShortcuts(config) {
@@ -706,16 +401,15 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
                 this.logFrame(this.currentFrame);
                 break;
                 // a for "add current frame to stops"
+              case "L":
+                this.logGlobal(this.currentFrame);
+                break;
               case "a":
-                this.stops = [...new Set([...this.stops, this.currentFrame])].sort(function(a, b) {
-                  return a - b;
-                });
-                console.log(this.stops);
+                this.__runAction("addStop");
                 break;
                 // r for "remove current frame to stops"
               case "r":
-                this.stops = this.stops.filter(x => x !== this.currentFrame)
-                console.log(this.stops);
+                this.__runAction("removeStop");
                 break;
                 // s for "search based on name of the frame"
                 // TODO: implement
@@ -738,7 +432,20 @@ https://leo-colisson.github.io/blenderpoint-web/?video=https://leo-colisson.gith
       window.start = async function(file) {
         console.log("Loading video");
         console.log(window.bpVideo);
-        window.bpVideo.loadVideoFileFromFile(file);
+        // we try to find a list of stops in the url. We use forceStops instead of stops, otherwise if we load
+        // a normal video first and then use stops it will use the older version.
+        const queryString = window.location.search;
+        const urlParams = new URLSearchParams(queryString);
+        const stops = urlParams.get('forceStops');
+        var config = {};
+        if(stops) {
+          alert("You configured in the URL stops that will override the value possibly encoded in the video. Keep that in mind if the video does not stop as expecting.");
+          config = {stops: stops};
+        }
+        // note that we do NOT look at the URL this time. This is on purpose, as otherwise loading a video
+        // from the url and then loading a file would pick the stops from the first video instead.
+        // Use S shortcut if you prefer this instead.
+        window.bpVideo.loadVideoFileFromFile(file, config);
 	/* window.bpVideo.setStops([0,25,50,100]); */
       }
       document.addEventListener('DOMContentLoaded', async () => {
