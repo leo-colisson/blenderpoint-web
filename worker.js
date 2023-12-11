@@ -148,6 +148,16 @@ async function waitEventUntil(item, event, f, functionSaveListener) {
   }
 }
 
+async function waitEventUntilWithAbort(item, event, f, functionSaveListener, abortIfNeeded) {
+  console.log("abortIfNeeded", abortIfNeeded);
+  const e = await abortIfNeeded(getPromiseFromEvent(item, event, functionSaveListener), "01");
+  if (f(e)) {
+    return e
+  } else {
+    return await abortIfNeeded(waitEventUntilWithAbort(item, event, f, functionSaveListener, abortIfNeeded));
+  }
+}
+
 // dequeue is not enough, as it seems to run before the call to output.
 // the event value is the id of the newly cached frame.
 const newCachedFrame = new Event("newCachedFrame");
@@ -157,6 +167,41 @@ const newCachedFrame = new Event("newCachedFrame");
  * console.log("Yeahhh Received!"); */
 
 
+// Needed to abort everything when a new function is called by the user.
+// https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal#implementing_an_abortable_api
+function makeMeAbortIfNeeded(promise, signal, debug) {
+  return new Promise((resolve, reject) =>{
+    // If the signal is already aborted, immediately throw in order to reject the promise.
+    if (signal.aborted) {
+      console.log("Stopped before promise", promise);
+      reject(signal.reason);
+    }
+    const myListener = () => {
+      // Why isn't this working?? It s
+      console.log("Just received a signal to abort");
+      // Stop the main operation
+      // Reject the promise with the abort reason.
+      // WARNING: if the promise itself contains non blocking stuff, it will still continue to run.
+      console.log("Stopped during promise", promise, debug);
+      reject(signal.reason);
+      //reject(new Error(debug));
+    };
+    promise.then(x => {
+      signal.removeEventListener("abort", myListener);
+      resolve(x);
+    });
+
+    signal.addEventListener("abort", myListener, {once: true});
+  });
+}
+
+// catches the abort. Only use if you do NOT await for efficiency reasons for instance. Otherwise the
+// next code will just run normally.
+function silentlyAbort(promise) {
+  return promise.catch(error => {
+    console.log("I just got error", error);
+  });
+}
 
 // Used to get the frames in order to 
 class GetAnyFrame {
@@ -237,19 +282,23 @@ class GetAnyFrame {
     this.decoder = new VideoDecoder({
       output: this._onDecodedFrame.bind(this),
       error: (e) => {
-        console.error(e);
+        console.log("I just got an error during decoding:", e);
+        /* console.error(e); */
         // This does not exist for now: more cleanly deal with error later.
         setStatus("decode", e);
       },
     });
 
-    // To avoid race conditions, cf _forceAddInCache
-    this.forceAddInCacheCounter = 0;
-
     // So that we know if we need to reset or not
     this.nextFrameToAskForDecode = 0;
+
+    this._getMainAbortSignal = userConfig._getMainAbortSignal;
   }
 
+  abortIfNeeded(promise, debug) {
+    return makeMeAbortIfNeeded(promise, this._getMainAbortSignal(), debug);
+  }
+  
   getVideoWidth() {
     return this.videoWidth;
   }
@@ -306,6 +355,7 @@ class GetAnyFrame {
   }
   
   _onDecodedFrame(frame) {
+    console.log("starting onDecodedFrame");
     var idFrame = this.idOfNextDecodedKeyFrame;
     this.idOfNextDecodedKeyFrame++;
     // We add the frame to the cache
@@ -316,11 +366,13 @@ class GetAnyFrame {
     });
     this.nextPriorityRemove++;
     currentWorker.dispatchEvent(newCachedFrame, {id: idFrame});
+    console.log("ending onDecodedFrame");
   }
 
   // We can specify an element not to garbage collect (useful to keey the last value that was decoded)
   // Cleans the frame to ensure the memory contains only a small number of decoded frames.
   _garbageCollectFrames(fromIdFrameNotToGarbageCollect, toExcludedIdFrameNotToGarbageCollect) {
+    console.log("In _garbageCollectFrames");
     // If there were an error, for instance we stopped the function due to a race condition, no need to garbage
     // collect now.
     if(toExcludedIdFrameNotToGarbageCollect < 0) {
@@ -351,13 +403,12 @@ class GetAnyFrame {
   // Make sure that all elements between idFrom and idToExcluded are in the cache. It returns the last element
   // that was send to decode (might be larger, like +10 due to latency of codec), useful for preserving it in the cache.
   async _forceAddInCache(idFrom, idToExcluded) {
+    console.log("In _forceAddInCache");
     // We want to make sure we do not call this function twice (race conditions on the decoder could be fairly bad).
     // So we increment a public counter when we start this function, and all functions that are currently running
     // with a lower counter stop. Seems there is no other way?
     // https://stackoverflow.com/questions/26298500/stop-pending-async-function-in-javascript
-    this.forceAddInCacheCounter++; // We increment the counter to invalid it
-    const currentForceAddInCacheCounter = this.forceAddInCacheCounter;
-    console.log("Starting _forceAddInCache with id", currentForceAddInCacheCounter, "from", idFrom, "to", idToExcluded);
+    console.log("Starting _forceAddInCache", "from", idFrom, "to", idToExcluded);
     // Make sure they are not too large, and properly ordered
     if(idFrom >= this.allNonDecodedFrames.length) { return -1 }
     idToExcluded = Math.min(idToExcluded, this.allNonDecodedFrames.length);
@@ -407,29 +458,14 @@ class GetAnyFrame {
     }
     while (!this.cachedFrames.has(idToExcluded)) {
       // Someone else started to run this function. Let us stop then.
-      if (this.forceAddInCacheCounter != currentForceAddInCacheCounter) {
-        console.log("Someone else is calling me: we stop now.");
-        return -2;
-      }
       if (this.decoder.decodeQueueSize > this.maxDecodeQueueSize) {
         console.log("The decoder is overwhelmed, let's wait before sending new stuff in the queue of size: ", this.decoder.decodeQueueSize);
       } else {
         console.log("Starting to decoding frame ", this.nextFrameToAskForDecode, this.decoder.decodeQueueSize, this.maxDecodeQueueSize);
         if(this.nextFrameToAskForDecode >= this.allNonDecodedFrames.length) {
           // We arrived at the end of the video: let us flush (unless someone else is already running this function)
-          const mustAbort = await (() => {
-            if (this.forceAddInCacheCounter != currentForceAddInCacheCounter) {
-              return false;
-            } else {
-              this.decoder.flush();
-              return true;
-            }
-          })();
-          if (mustAbort) {
-            return -2
-          } else {
-            return nextElementToDecode;
-          }
+          await this.abortIfNeeded(this.decoder.flush(), "flush");
+          return nextElementToDecode;
         } else {
           this.decoder.decode(this.allNonDecodedFrames[this.nextFrameToAskForDecode].nonDecodedFrame);
           this.nextFrameToAskForDecode++;
@@ -439,7 +475,9 @@ class GetAnyFrame {
       // time to the decoder to run.
       // This is needed, otherwise the decoder will not have time to start its job and we will get into
       // an infinite loop.
-      await wait(0);
+      console.log("Give a bit of time to decoder");
+      await this.abortIfNeeded(wait(0), "foowait");
+      console.log("Decoder had enough time");
     }
     return nextElementToDecode;
   }
@@ -449,7 +487,8 @@ class GetAnyFrame {
   }
   
   async _forceAddInCacheAndGarbageCollect(idFrom, idToExcluded, idFromGC, idToGC) {
-    await this._forceAddInCache(idFrom, idToExcluded);
+    console.log("In _forceAddInCacheAndGarbageCollect");
+    await this.abortIfNeeded(this._forceAddInCache(idFrom, idToExcluded), "foo _forceAddInCacheAndGarbageCollect");
     if (idToGC === undefined) {
       idToGC = this.nextFrameToAskForDecode;
     }
@@ -506,7 +545,7 @@ class GetAnyFrame {
         // console.log("firstNonCachedFrame=",firstNonCachedFrame, "at distance smaller than ", this.nbFramesDecodeInAdvance, this.cachedFrames.has(i+this.nbFramesDecodeInAdvance), this.cachedFrames);
         if (firstNonCachedFrame != -1) {
           // We do not use await on purpose, otherwise it might slow down the process when it fetches new stuff
-          this._forceAddInCacheAndGarbageCollect(firstNonCachedFrame, i + this.nbFramesDecodeInAdvance + 1,i);
+          silentlyAbort(this._forceAddInCacheAndGarbageCollect(firstNonCachedFrame, i + this.nbFramesDecodeInAdvance + 1,i));
         }
       }
       return this.cachedFrames.get(i).frame;
@@ -514,21 +553,30 @@ class GetAnyFrame {
       console.log("Frame", i, "NOT in the cache.")
       if(backward) {
         // For backward, we don't care te preserve the cache since it is in the other direction.
-        this._forceAddInCacheAndGarbageCollect(
+        // We do not await for efficiency reasons
+        silentlyAbort(this._forceAddInCacheAndGarbageCollect(
           this.allNonDecodedFrames[i].idParentKeyFrame, i + 1,
           this.allNonDecodedFrames[i].idParentKeyFrame, i + 1
-        );
+        ));
       } else {
         console.log("We will add in the cache", i, i + this.nbFramesDecodeInAdvance + 1);
-        this._forceAddInCacheAndGarbageCollect(i, i + this.nbFramesDecodeInAdvance + 1);
+        // We do not await for efficiency reasons
+        silentlyAbort(this._forceAddInCacheAndGarbageCollect(i, i + this.nbFramesDecodeInAdvance + 1));
       }
       // If the decoder saturated, the frame might not be ready yet.
       if(!this.cachedFrames.has(i)) {
         console.log("The frame is not arrived yet, I'm waiting for it to come…");
         console.log("this.decoder.decodeQueueSize", this.decoder.decodeQueueSize);
-        await waitEventUntil(self, "newCachedFrame", () => this.cachedFrames.has(i), (l) => {
-          this.getFrameListener = l
-        });
+        console.log("this.abortIfNeeded 0", this.abortIfNeeded);
+        await this.abortIfNeeded(waitEventUntilWithAbort(
+          self,
+          "newCachedFrame",
+          () => this.cachedFrames.has(i),
+          (l) => {
+            this.getFrameListener = l
+          },
+          this.abortIfNeeded.bind(this)
+        ), "foo eiaunrst");
       }
       console.log("We received the frame");
       return this.cachedFrames.get(i).frame;
@@ -551,9 +599,16 @@ class GetAnyFrame {
   }
 }
 
+// Throw when the user wants to do something else and cancel running code
+class UsercancelledError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UsercancelledError";
+  }
+}
 
-class BlenderpointVideoWorker {
-  constructor(canvas, config) {
+  class BlenderpointVideoWorker {
+    constructor(canvas, config) {
     config = config || {};
     this.canvas = canvas;
     this.ctx = this.canvas.getContext("2d");
@@ -587,6 +642,8 @@ class BlenderpointVideoWorker {
     this.frameLog = (m) => console.log(m);
     // This will contain the instance of GetAnyFrame
     this.anyFrame = null;
+    // 
+    this._resetAbortSignal();
     // resize canvas when needed
     addEventListener("fullscreenchange", async (event) => {
       if (!document.fullscreenElement) {
@@ -601,6 +658,25 @@ class BlenderpointVideoWorker {
     // To know the starting frame/date where we started to play (or avoid a frame jump):
     this.initTime = null;
     this.initialFrame = null;
+  }
+
+  _resetAbortSignal() {
+    this.abortController = new AbortController();
+    this.mainAbortSignal = this.abortController.signal;
+  }
+
+  _stopOtherFunctions() {
+    const error = new UsercancelledError("User performed a new action");
+    this.abortController.abort(error);
+    this._resetAbortSignal();
+  }
+
+  _getMainAbortSignal() {
+    return this.mainAbortSignal;
+  }
+
+  abortIfNeeded(promise, debug) {
+    return makeMeAbortIfNeeded(promise, this._getMainAbortSignal(), debug);
   }
 
   updateAlertFunction (new_alert) {
@@ -640,7 +716,7 @@ class BlenderpointVideoWorker {
     console.log("File", file);
     let videoObjectURL = URL.createObjectURL(file);
     console.log("url", videoObjectURL);
-    await this.loadVideoFileFromObjectURL(videoObjectURL, config);
+    await this.abortIfNeeded(this.loadVideoFileFromObjectURL(videoObjectURL, config), "In loadVideoFileFromFile");
     URL.revokeObjectURL(file); // revoke URL to prevent memory leak
   }
   
@@ -665,6 +741,7 @@ class BlenderpointVideoWorker {
       this.anyFrame.close();
     }
     this.userConfig = userConfig;
+    this.userConfig._getMainAbortSignal = this._getMainAbortSignal.bind(this);
     this.anyFrame = new GetAnyFrame(videoObjectURL, userConfig);
   }
 
@@ -725,8 +802,8 @@ class BlenderpointVideoWorker {
     this.isReady = true;
     // We draw the first frame
     console.log("Foo");
-    await wait(0); // This is needed or the decoder will not get the time to run
-    await this.gotoFrame(0);
+    await this.abortIfNeeded(wait(0), "onFinishDemuxer"); // This is needed or the decoder will not get the time to run
+    await this.abortIfNeeded(this.gotoFrame(0), "eianlpés");
   }
   
   _ensureStoppedAnimationFrameFetching() {
@@ -785,7 +862,7 @@ class BlenderpointVideoWorker {
       }
     }
 
-    const frame = await this.anyFrame.getFrame(i, backward);
+    const frame = await this.abortIfNeeded(this.anyFrame.getFrame(i, backward), "tnrstn");
     if (frame) {
       this._drawFrame(frame);
       this.currentFrame = i;
@@ -797,21 +874,28 @@ class BlenderpointVideoWorker {
     }
   }
 
-  async gotoFrame(i) {
+  async _gotoFrame(i) {
     console.log("goto",i);
     this._ensureStoppedAnimationFrame();
-    await this._drawFrameFromIndex(i, undefined, true);
+    await this.abortIfNeeded(this._drawFrameFromIndex(i, undefined, true), "eiauyd");
     // triggers a refresh
-    await this.waitRedraw();
+    await this.abortIfNeeded(this.waitRedraw(), "nelelel");
     this._ensureStoppedAnimationFrame();
   }
 
+  async gotoFrame(i) {
+    // Make sure to stop existing functions
+    this._stopOtherFunctions();
+    await this.abortIfNeeded(this._gotoFrame(i), "rrststst");
+  }
+  
   async gotoPage(i) {
+    this._stopOtherFunctions();
     const pages = [...new Set([...this.stops, 0, Infinity])];
     if (i >= pages.length) {
-      await this.gotoFrame(Infinity)
+      await this.abortIfNeeded(this._gotoFrame(Infinity), "foofoo");
     } else {
-      await this.gotoFrame(pages[i])
+      await this.abortIfNeeded(this._gotoFrame(pages[i]), "foo eianrst");
     }
   }
 
@@ -844,24 +928,6 @@ class BlenderpointVideoWorker {
     }
   }
 
-  async gotoFrameGUI(i) {
-    const nbFrames = this.getNumberOfFramesIfPossible();
-    const answer = prompt("To which frame do you want to go? (currently " + this.currentFrame + "/" + nbFrames + ")");
-    if (answer) {
-      this.gotoFrame(parseInt(answer));
-    }
-  }
-
-  async specifyStopsGui(i) {
-    const answer = prompt("Provide the list of stops to use (e.g. '1, 2, 3').");
-    if (answer) {
-      this.stops = [...new Set(answer.split(",").map(e => parseInt(e)))].sort(function(a, b) {
-        return a - b;
-      });
-    }
-  }
-  
-  
   // call "await this.waitRedraw()" to wait for animationFrame to
   waitRedraw() {
     return new Promise(resolve => {
@@ -871,9 +937,10 @@ class BlenderpointVideoWorker {
 
   // play at the max FPS allowed by the screen refresh rate.
   async playAtMaxSpeed() {
+    this._stopOtherFunctions();
     // Needed to allow stopping via the toggle play button
     this.isPlayingMaxSpeed = true;
-    await this._playAtMaxSpeed();
+    await this.abortIfNeeded(this._playAtMaxSpeed(), "einarstei");
   }
 
   // play at the max FPS allowed by the screen refresh rate.
@@ -885,10 +952,10 @@ class BlenderpointVideoWorker {
       return;
     }
     const nextFrame = this.currentFrame + 1;
-    const notTheLastOne = await this._drawFrameFromIndex(nextFrame);
+    const notTheLastOne = await this.abortIfNeeded(this._drawFrameFromIndex(nextFrame), "xxxxxx");
     if(notTheLastOne) {
-      await this.waitRedraw();
-      this._playAtMaxSpeed();
+      await this.abortIfNeeded(this.waitRedraw(), "wreiastr");
+      await this.abortIfNeeded(this._playAtMaxSpeed(), "eiuarnst");
     }
     else {
       this.isPlayingMaxSpeed = false;
@@ -920,6 +987,8 @@ class BlenderpointVideoWorker {
 
   // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
   async playUntilNextStop(stop) {
+    console.log("I am starting playUntilNextStop");
+    this._stopOtherFunctions();
     // If we click while playing, we jump to the stop directly:
     console.log("called playuntil");
     if (!this.isReady) {
@@ -928,12 +997,12 @@ class BlenderpointVideoWorker {
     }
     if (this.isPlayingUntil != undefined) {
       console.log("I am playing until");
-      await this.gotoFrame(this.isPlayingUntil);
+      await this.abortIfNeeded(this._gotoFrame(this.isPlayingUntil), "nrststs");
       return
     }
     if (this.isPlayingUntilPrevious != undefined) {
       console.log("I am playing until previous");
-      await this.gotoFrame(this.currentFrame);
+      await this.abortIfNeeded(this._gotoFrame(this.currentFrame), "ssss");
       return
     }
     console.log("We were apparently not playing");
@@ -959,14 +1028,14 @@ class BlenderpointVideoWorker {
         frameJump = true;
         console.log("jump: so instead we will draw ", frameToDisplay);
       }
-      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay);
+      const notTheLastOne = await this.abortIfNeeded(this._drawFrameFromIndex(frameToDisplay), "meriuast");
       if (frameJump) {
         this.initTime = performance.now();
         this.initialFrame = frameToDisplay;
       }
       if(notTheLastOne && frameToDisplay < nextStop) {
-        await this.waitRedraw();
-        await playAux();
+        await this.abortIfNeeded(this.waitRedraw(), "nrstst");
+        await this.abortIfNeeded(playAux(), "nsrtsnrt");
       }
       else {
         console.log("stop", this.stops);
@@ -974,11 +1043,12 @@ class BlenderpointVideoWorker {
         this._ensureStoppedAnimationFrame();
       }
     }
-    await playAux();
+    await this.abortIfNeeded(playAux(), "lieauép");
   }
   
   // nextstop is optional, it will be automatially computed if needed. Set to Infinity if you want to play until the end.
   async playUntilPreviousStop(stop) {
+    this._stopOtherFunctions();
     if (!this.isReady) {
       console.log("The file is not yet ready, wait a bit more.");
       return
@@ -986,12 +1056,12 @@ class BlenderpointVideoWorker {
     // If we click while playing, we jump to the stop directly:
     console.log("called playuntilprevious");
     if (this.isPlayingUntilPrevious != undefined) {
-      await this.gotoFrame(this.isPlayingUntilPrevious);
+      await this.abortIfNeeded(this._gotoFrame(this.isPlayingUntilPrevious), "nerstnrst");
       return
     }
     // if we were playing forward, we stop here
     if (this.isPlayingUntil != undefined) {
-      await this.gotoFrame(this.currentFrame);
+      await this.abortIfNeeded(this._gotoFrame(this.currentFrame), "dpdpdpd");
       return
     }
     // First stop the play
@@ -1019,14 +1089,14 @@ class BlenderpointVideoWorker {
         console.log("jump: so instead we will draw ", frameToDisplay);
       }
 
-      const notTheLastOne = await this._drawFrameFromIndex(frameToDisplay, true);
+      const notTheLastOne = await this.abortIfNeeded(this._drawFrameFromIndex(frameToDisplay, true), "seseses");
       if (frameJump) {
         this.initTime = performance.now();
         this.initialFrame = frameToDisplay;
       }
       if(notTheLastOne && frameToDisplay > nextStop) {
-        await this.waitRedraw();
-        await playAux();
+        await this.abortIfNeeded(this.waitRedraw(), "nrst");
+        await this.abortIfNeeded(playAux(), "ssediuatdlt");
       }
       else {
         console.log("stop");
@@ -1034,12 +1104,13 @@ class BlenderpointVideoWorker {
         this._ensureStoppedAnimationFrame();
       }
     }
-    await playAux();
+    await this.abortIfNeeded(playAux(), "nrsteuid");
   }
 
   
   // stop is optional, it will be automatially computed
   async gotoPreviousStop(stop) {
+    this._stopOtherFunctions();
     if (!this.isReady) {
       console.log("The file is not yet ready, wait a bit more.");
       return
@@ -1047,19 +1118,22 @@ class BlenderpointVideoWorker {
     // First stop the play
     this._ensureStoppedAnimationFrame();
     const previousStop = stop || this.getPreviousStop();
-    return await this.gotoFrame(previousStop, true, true);
+    return await this.abortIfNeeded(this._gotoFrame(previousStop, true, true), "nrstnr");
   }
 
   async gotoPreviousFrame() {
-    await this.gotoFrame(this.currentFrame - 1, true, true);
+    this._stopOtherFunctions();
+    await this.abortIfNeeded(this._gotoFrame(this.currentFrame - 1, true, true), "eiudid");
   }
 
   async gotoNextFrame() {
-    await this.gotoFrame(this.currentFrame + 1)
+    this._stopOtherFunctions();
+    await this.abortIfNeeded(this._gotoFrame(this.currentFrame + 1), "eatldits");
   }
 
 
   async pause() {
+    this._stopOtherFunctions();
     this._ensureStoppedAnimationFrame();
   }
 
@@ -1070,7 +1144,7 @@ class BlenderpointVideoWorker {
       }
       this._ensureStoppedAnimationFrame();
     } else {
-      this.playUntilNextStop(Infinity)
+      await this.playUntilNextStop(Infinity)
     }
   }
   
@@ -1095,8 +1169,8 @@ class BlenderpointVideoWorker {
 
   async redrawWhenResolutionChanges() {
     if (!this.isPlaying()) { // No need to draw if it’s already playing
-      await this._drawFrameFromIndex(this.currentFrame);
-      await this.waitRedraw();
+      await this.abortIfNeeded(this._drawFrameFromIndex(this.currentFrame), "eisisiss");
+      await this.abortIfNeeded(this.waitRedraw(), "tzelleds");
       this._ensureStoppedAnimationFrame(); // otherwise it thinks that it is still playing.
       console.log("we are not playing")
     } else {
@@ -1150,103 +1224,124 @@ class BlenderpointVideoWorker {
   }
 
   async action(actionType, actionData, actionID) {
-    switch (actionType) {
-      case 'loadVideoFileFromObjectURL':
-        console.log("userconfig action", actionData.config);
-        this.loadVideoFileFromObjectURL(actionData.videoObjectURL, actionData.config);
-        break;
-      case 'playUntilNextStop':
-        this.playUntilNextStop();
-        break;
-      case 'playUntilPreviousStop':
-        this.playUntilPreviousStop();
-        break;
-      case 'togglePlayPause':
-        this.togglePlayPause();
-        break;
-      case 'gotoNextFrame':
-        this.gotoNextFrame();
-        break;
-      case 'gotoPreviousFrame':
-        this.gotoPreviousFrame();
-        break;
-      case 'gotoPreviousStop':
-        this.gotoPreviousStop(actionData);
-        break;
-      case 'pause':
-        this.pause();
-        break;
-      case 'playAtMaxSpeed':
-        this.playAtMaxSpeed();
-        break;
-      case 'gotoFrame':
-        this.gotoFrame(actionData);
-        break;
-      case 'gotoPage':
-        this.gotoPage(actionData);
-        break;
-      case 'logFrame':
-          this.logFrame(actionData === undefined ? this.currentFrame : actionData);
-        break;
-      case 'logGlobal':
-        this.logGlobal();
-        break;
-      case 'addStop':
-        this.stops = [...new Set([...this.stops, this.currentFrame])].sort(function(a, b) {
-          return a - b;
-        });
-        console.log(this.stops);
-        break;
-      case 'removeStop':
-        this.stops = this.stops.filter(x => x !== this.currentFrame)
-        console.log(this.stops);
-        break;        
-      case 'setStops':
-        this.setStops(actionData);
-        break;
-      case 'getStops':
-        self.postMessage({actionID: actionID, result: this.getStops()});
-        break;
-      case 'getCurrentPage':
-        self.postMessage({actionID: actionID, result: this.getCurrentPage()});
-        break;
-      case 'getCurrentFrame':
-        self.postMessage({actionID: actionID, result: this.getCurrentFrame()});
-        break;
-      case 'getNumberOfPages':
-        console.log("actionID", actionID);
-        const nbPages = this.getNumberOfPages();
-        self.postMessage({actionID: actionID, result: nbPages});
-        break;
-      case 'getNumberOfFramesIfPossible':
-        self.postMessage({actionID: actionID, result: this.getNumberOfFramesIfPossible()});
-        break;
-      case 'getInfoOnFrame':
-        self.postMessage({actionID: actionID, result: this.getInfoOnFrame(actionData)});
-        break;
-      case 'loadVideoFileFromFile':
-        this.loadVideoFileFromFile(actionData.file, actionData.config);
-        break;
-      case 'redrawWhenResolutionChanges':
-        this.redrawWhenResolutionChanges();
-        break;
-      case 'restoreCanvasSize':
-        this.restoreCanvasSize();
-        break;
-      case 'canvasChangeSize':
-        this.canvasChangeSize(actionData.width, actionData.height);
-        break;
-      case 'close':
-        this.close();
-        break;
-      case 'setFps':
-        this.setFps(actionData)
-        break;
+    try {
+      switch (actionType) {
+        case 'loadVideoFileFromObjectURL':
+          console.log("userconfig action", actionData.config);
+          await this.loadVideoFileFromObjectURL(actionData.videoObjectURL, actionData.config);
+          break;
+        case 'playUntilNextStop':
+          await this.playUntilNextStop();
+          break;
+        case 'playUntilPreviousStop':
+          await this.playUntilPreviousStop();
+          break;
+        case 'togglePlayPause':
+          await this.togglePlayPause();
+          break;
+        case 'gotoNextFrame':
+          await this.gotoNextFrame();
+          break;
+        case 'gotoPreviousFrame':
+          await this.gotoPreviousFrame();
+          break;
+        case 'gotoPreviousStop':
+          await this.gotoPreviousStop(actionData);
+          break;
+        case 'pause':
+          await this.pause();
+          break;
+        case 'playAtMaxSpeed':
+          await this.playAtMaxSpeed();
+          break;
+        case 'gotoFrame':
+          await this.gotoFrame(actionData);
+          break;
+        case 'gotoPage':
+          await this.gotoPage(actionData);
+          break;
+        case 'logFrame':
+          await this.logFrame(actionData === undefined ? this.currentFrame : actionData);
+          break;
+        case 'logGlobal':
+          await this.logGlobal();
+          break;
+        case 'addStop':
+          this.stops = [...new Set([...this.stops, this.currentFrame])].sort(function(a, b) {
+            return a - b;
+          });
+          console.log(this.stops);
+          break;
+        case 'removeStop':
+          this.stops = this.stops.filter(x => x !== this.currentFrame)
+          console.log(this.stops);
+          break;        
+        case 'setStops':
+          this.setStops(actionData);
+          break;
+        case 'getStops':
+          self.postMessage({actionID: actionID, result: this.getStops()});
+          break;
+        case 'getCurrentPage':
+          self.postMessage({actionID: actionID, result: this.getCurrentPage()});
+          break;
+        case 'getCurrentFrame':
+          self.postMessage({actionID: actionID, result: this.getCurrentFrame()});
+          break;
+        case 'getNumberOfPages':
+          console.log("actionID", actionID);
+          const nbPages = this.getNumberOfPages();
+          self.postMessage({actionID: actionID, result: nbPages});
+          break;
+        case 'getNumberOfFramesIfPossible':
+          self.postMessage({actionID: actionID, result: this.getNumberOfFramesIfPossible()});
+          break;
+        case 'getInfoOnFrame':
+          self.postMessage({actionID: actionID, result: this.getInfoOnFrame(actionData)});
+          break;
+        case 'loadVideoFileFromFile':
+          await this.loadVideoFileFromFile(actionData.file, actionData.config);
+          break;
+        case 'redrawWhenResolutionChanges':
+          await this.redrawWhenResolutionChanges();
+          break;
+        case 'restoreCanvasSize':
+          await this.restoreCanvasSize();
+          break;
+        case 'canvasChangeSize':
+          await this.canvasChangeSize(actionData.width, actionData.height);
+          break;
+        case 'close':
+          await this.close();
+          break;
+        case 'setFps':
+          await this.setFps(actionData)
+          break;
+      }
+    } catch (error) {
+      console.log("catch: We just got error", error);
+      // We do not want to display errors for the error we get when the user pressed twice a given key
+      if (!error.silentCatch) {
+        // throw error;
+      }
     }
+    console.log("catch: We finished the function");
   }
 }
 
 self.bpVideo = null;
+// Catch asynchronous errors
+// https://developer.mozilla.org/en-US/docs/Web/API/Window/unhandledrejection_event
+self.onunhandledrejection = function (event) {
+  if(event.reason instanceof UsercancelledError) {
+    event.preventDefault();
+  }
+};
+self.onerror = function (event) {
+  if(event.reason instanceof UsercancelledError) {
+    event.preventDefault();
+  }
+};
 self.onmessage = function(msg) {
   if (msg.data.canvas) {
     console.log("Hey from worker!");
