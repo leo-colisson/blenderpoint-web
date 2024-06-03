@@ -213,9 +213,9 @@ class GetAnyFrame {
     // garbage collect when we go over this limit after caching these elements, so in total we can go up to
     // roughly this.maxNumberCachedFrames + 250. Note that the chunk just loaded cannot be garbage collected.
     this.maxNumberCachedFrames = userConfig.maxNumberCachedFrames || 50;
-    this.nbFramesDecodeInAdvance = userConfig.minNumberCachedFrames || 3;
-    this.minNumberCachedFrames = Math.max(this.nbFramesDecodeInAdvance, userConfig.minNumberCachedFrames || 3);
-    this.maxDecodeQueueSize = Math.max(this.minNumberCachedFrames, userConfig.maxDecodeQueueSize || 3);
+    this.nbFramesDecodeInAdvance = userConfig.minNumberCachedFrames || 13;
+    this.minNumberCachedFrames = Math.max(this.nbFramesDecodeInAdvance, userConfig.minNumberCachedFrames || 13);
+    this.maxDecodeQueueSize = Math.max(this.minNumberCachedFrames, userConfig.maxDecodeQueueSize || 13);
     // cachedFrames[i] = {
     //   frame: frame,
     //   priorityRemove: // higher says that the image should be garbage collected later. Infinity means that
