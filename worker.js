@@ -477,7 +477,7 @@ class GetAnyFrame {
       // This is needed, otherwise the decoder will not have time to start its job and we will get into
       // an infinite loop.
       console.debug("Give a bit of time to decoder");
-      await this.abortIfNeeded(wait(0), "foowait");
+      await this.abortIfNeeded(wait(4), "foowait");
       console.debug("Decoder had enough time");
     }
     return nextElementToDecode;
@@ -803,7 +803,7 @@ class UsercancelledError extends Error {
     this.isReady = true;
     // We draw the first frame
     console.debug("Foo");
-    await this.abortIfNeeded(wait(0), "onFinishDemuxer"); // This is needed or the decoder will not get the time to run
+    await this.abortIfNeeded(wait(4), "onFinishDemuxer"); // This is needed or the decoder will not get the time to run
     await this.abortIfNeeded(this.gotoFrame(0), "eianlpés");
   }
   
