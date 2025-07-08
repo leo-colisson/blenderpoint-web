@@ -3,6 +3,13 @@
 
 const currentWorker = self;
 const wait = (n) => new Promise((resolve) => setTimeout(resolve, n));
+const wait_dequeue = (videoDecoder) => new Promise((resolve) => {
+  console.log("We are waiting for a new frame to be dequeued................");
+  videoDecoder.addEventListener("dequeue", (event) => {
+    console.log("................We just received a dequeue event from the decoder!");
+    resolve()
+  }, {once: true});
+});
 
 class MyMP4FileSink {
   #setStatus = null;
@@ -355,8 +362,16 @@ class GetAnyFrame {
     }
   }
   
-  _onDecodedFrame(frame) {
+  async _onDecodedFrame(frameInDecoder) {
     console.debug("starting onDecodedFrame");
+    // In windows, we need to close frames as soon as possible, otherwise the decoder will freeze,
+    // since the memory of the frames is kept inside the decoder and not in the browser. To support
+    // backward play, the first thing we do is to store it inside the browser memory, this way the
+    // decoder will not freeze. frameInDecoder.clone(), new VideoFrame(frameInDecoder) do not work
+    // explaining why we use createImageBitmap.
+    const frame = await createImageBitmap(frameInDecoder);
+    frameInDecoder.close();
+    
     var idFrame = this.idOfNextDecodedKeyFrame;
     this.idOfNextDecodedKeyFrame++;
     // We add the frame to the cache
@@ -461,6 +476,7 @@ class GetAnyFrame {
       // Someone else started to run this function. Let us stop then.
       if (this.decoder.decodeQueueSize > this.maxDecodeQueueSize) {
         console.log("The decoder is overwhelmed, let's wait before sending new stuff in the queue of size: ", this.decoder.decodeQueueSize);
+        await this.abortIfNeeded(wait_dequeue(this.decoder), "foowait");
       } else {
         console.debug("Starting to decoding frame ", this.nextFrameToAskForDecode, this.decoder.decodeQueueSize, this.maxDecodeQueueSize);
         if(this.nextFrameToAskForDecode >= this.allNonDecodedFrames.length) {
@@ -477,7 +493,7 @@ class GetAnyFrame {
       // This is needed, otherwise the decoder will not have time to start its job and we will get into
       // an infinite loop.
       console.debug("Give a bit of time to decoder");
-      await this.abortIfNeeded(wait(4), "foowait");
+      await this.abortIfNeeded(wait(0), "foowait");
       console.debug("Decoder had enough time");
     }
     return nextElementToDecode;
