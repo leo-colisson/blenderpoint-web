@@ -7,7 +7,8 @@
   </head>
   <body>
     <h1>Blenderpoint web video reader</h1>
-    <canvas id="canvasEl" width="700px" height="500px"></canvas>
+    <!-- user-select: none is needed to forbid the selection, otherwise the canvas become blue in firefox when clicking on it to go to the next slide. -->
+    <canvas id="canvasEl" width="700px" height="500px" style="user-select: none;"></canvas>
     <br>
     <input type="file" accept="video/mp4" onchange="start(this.files[0])"/>
     <button type="button" onclick="bpVideo.togglePlayPause()">Play/Pause</button>
@@ -67,7 +68,15 @@ https://leo-colisson.github.io/blenderpoint-web/forceStops=10,20,50</pre>
 
     <h2>Acknowledgment</h2>
 
-    I'd like to thank <a href="https://github.com/w3c/webcodecs/issues/753">sandersdan</a> that provided very useful advices to make this more efficient. 
+    <p>I'd like to thank <a href="https://github.com/w3c/webcodecs/issues/753">sandersdan</a> that provided very useful advices to make this more efficient.</p>
+
+    <h2>License and bug report</h2>
+
+    This project is open source and licensed under the GNU GPL license. Feel free to submit <a href="https://github.com/leo-colisson/blenderpoint-web/issues">bug reports in the corresponding section</a> of the <a href="https://github.com/leo-colisson/blenderpoint-web">github page</a>.
+    
+    <h2>Compatibility</h2>
+
+    <p>This tool is compatible (in theory) with <a href="https://caniuse.com/webcodecs">any browser supporting WebCodec API (click to see the list)</a>, i.e. Chrome >= 94, Firefox >= 130, Firefox android >= 138, and Safari >= 26-Technology-Preview. However, this API being relatively new (as of 2025), you may experience bugs in early versions of the browsers (for instance Firefox used to jitter on older versions, now it is seems to be fixed in 139.0.4). Note also that you should use video codecs that browser can decode. I used mp4 with h264 + yuv420p with great success, but note that <a href="blenderpoint-web/tests/index.html">Firefox is not compatible with videos encoded in yuvj444p</a> so make sure to turn them into yuv420p with something like <code>ffmpeg -i input.mp4 -pix_fmt yuv420p output.mp4</code>). If you still experience a bug in the most recent version of the browser, please report it <a href="https://github.com/leo-colisson/blenderpoint-web/issues">here</a>.</p>
     
     <h2>TODO and known bugs</h2>
     <ul>
